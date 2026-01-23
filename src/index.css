@@ -56,71 +56,6 @@ body {
     0 0 0 4px var(--accent-soft);
 }
 
-.container__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  background: rgba(255, 255, 255, 0.03);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.container__type {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 1.5px;
-  color: var(--accent);
-  padding: 4px 10px;
-  background: var(--accent-soft);
-  border-radius: 6px;
-}
-
-.container__direction {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  color: var(--text-secondary);
-  padding: 4px 10px;
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.container--horizontal .container__direction::before {
-  content: '↔';
-  font-size: 12px;
-}
-
-.container--vertical .container__direction::before {
-  content: '↕';
-  font-size: 12px;
-}
-
-.container__content {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  align-content: flex-start;
-  padding: 16px;
-  min-height: 80px;
-}
-
-.container--horizontal .container__content {
-  flex-direction: row;
-  flex-wrap: nowrap;
-  overflow-x: auto;
-}
-
-.container--vertical .container__content {
-  flex-direction: column;
-}
-
 /* ===========================================
    Default Draggable Styles
    =========================================== */
@@ -151,11 +86,7 @@ body {
 }
 
 /* Animation for items that shift position */
-.container__content {
-  /* Enable smooth layout transitions for children */
-}
-
-.container__content > .draggable {
+.container > .draggable {
   transition: 
     transform 0.25s cubic-bezier(0.2, 0, 0, 1),
     opacity 0.2s cubic-bezier(0.2, 0, 0, 1),
@@ -204,18 +135,13 @@ body {
   overflow: visible !important;
 }
 
-.kanban__board > .container__header {
-  display: none;
-}
-
-.kanban__board > .container__content {
+.kanban__board.container {
+  display: flex;
   gap: 20px;
-  padding: 0 !important;
+  padding: 0;
   overflow-x: auto;
   overflow-y: visible;
-  max-height: none !important;
-  min-height: auto;
-  padding-bottom: 20px !important;
+  padding-bottom: 20px;
 }
 
 /* Column Draggable Wrapper */
@@ -278,43 +204,36 @@ body {
 }
 
 /* Column Content Container - Override defaults */
-.kanban__column-content {
-  min-height: 100px !important;
-  max-height: none !important;
-  background: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
-  border-radius: 0 !important;
-  flex: 1;
-  overflow: hidden;
-}
-
-.kanban__column-content > .container__header {
-  display: none;
-}
-
-.kanban__column-content > .container__content {
-  padding: 12px !important;
-  gap: 10px;
+.kanban__column-content.container {
+  min-height: 100px;
   max-height: calc(100vh - 320px);
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
+  flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
 }
 
-.kanban__column-content > .container__content::-webkit-scrollbar {
+.kanban__column-content.container::-webkit-scrollbar {
   width: 6px;
 }
 
-.kanban__column-content > .container__content::-webkit-scrollbar-track {
+.kanban__column-content.container::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.kanban__column-content > .container__content::-webkit-scrollbar-thumb {
+.kanban__column-content.container::-webkit-scrollbar-thumb {
   background: var(--surface-hover);
   border-radius: 3px;
 }
 
-.kanban__column-content > .container__content::-webkit-scrollbar-thumb:hover {
+.kanban__column-content.container::-webkit-scrollbar-thumb:hover {
   background: var(--text-muted);
 }
 
@@ -407,7 +326,7 @@ body {
 }
 
 /* Active drop target */
-.kanban__column-content.container--active > .container__content {
+.kanban__column-content.container--active {
   background: var(--accent-soft);
   border-radius: 8px;
 }

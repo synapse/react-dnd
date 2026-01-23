@@ -3,15 +3,24 @@ import { useDragDrop } from '../context/DragDropContext';
 import { DragDirection } from '../types';
 
 interface ContainerProps {
+  /** Unique identifier for this container */
   id: string;
+  /** Type identifier - draggables must match this type */
   type: string;
+  /** Optional array of accepted types (defaults to [type]) */
   acceptsTypes?: string[];
+  /** Optional direction constraint: 'horizontal' or 'vertical' */
   direction?: DragDirection;
+  /** Array of item IDs in current order */
   items: string[];
+  /** Callback when items are reordered within this container */
   onReorder: (items: string[]) => void;
+  /** Callback when an item moves from another container into this one */
   onItemMove?: (itemId: string, fromContainerId: string, toContainerId: string, atIndex: number) => void;
+  /** Additional CSS class names */
   className?: string;
-  renderItem: (itemId: string) => React.ReactNode;
+  /** Content to render (typically Draggable components) */
+  children: React.ReactNode;
 }
 
 export function Container({ 
@@ -23,7 +32,7 @@ export function Container({
   onReorder,
   onItemMove,
   className = '',
-  renderItem,
+  children,
 }: ContainerProps) {
   const { dragState, registerContainer, unregisterContainer } = useDragDrop();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -60,13 +69,7 @@ export function Container({
       data-type={type}
       data-direction={direction}
     >
-      <div className="container__header">
-        <span className="container__type">{type}</span>
-        {direction && <span className="container__direction">{direction}</span>}
-      </div>
-      <div className="container__content">
-        {items.map((itemId) => renderItem(itemId))}
-      </div>
+      {children}
     </div>
   );
 }

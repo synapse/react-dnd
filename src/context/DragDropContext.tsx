@@ -114,36 +114,34 @@ function DragPortal({
           smallestArea = area;
           targetContainerId = id;
           
-          const contentEl = container.element.querySelector('.container__content');
-          if (contentEl) {
-            const contentRect = contentEl.getBoundingClientRect();
-            
-            // Auto-scroll for vertical containers
-            if (container.direction === 'vertical' || !container.direction) {
-              if (e.clientY < contentRect.top + SCROLL_THRESHOLD && contentEl.scrollTop > 0) {
-                scrollIntervalRef.current = window.setInterval(() => {
-                  contentEl.scrollTop -= SCROLL_SPEED;
-                }, 16);
-              } else if (e.clientY > contentRect.bottom - SCROLL_THRESHOLD && 
-                         contentEl.scrollTop < contentEl.scrollHeight - contentEl.clientHeight) {
-                scrollIntervalRef.current = window.setInterval(() => {
-                  contentEl.scrollTop += SCROLL_SPEED;
-                }, 16);
-              }
+          // Auto-scroll using the container element directly
+          const scrollEl = container.element;
+          
+          // Auto-scroll for vertical containers
+          if (container.direction === 'vertical' || !container.direction) {
+            if (e.clientY < rect.top + SCROLL_THRESHOLD && scrollEl.scrollTop > 0) {
+              scrollIntervalRef.current = window.setInterval(() => {
+                scrollEl.scrollTop -= SCROLL_SPEED;
+              }, 16);
+            } else if (e.clientY > rect.bottom - SCROLL_THRESHOLD && 
+                       scrollEl.scrollTop < scrollEl.scrollHeight - scrollEl.clientHeight) {
+              scrollIntervalRef.current = window.setInterval(() => {
+                scrollEl.scrollTop += SCROLL_SPEED;
+              }, 16);
             }
-            
-            // Auto-scroll for horizontal containers
-            if (container.direction === 'horizontal') {
-              if (e.clientX < contentRect.left + SCROLL_THRESHOLD && contentEl.scrollLeft > 0) {
-                scrollIntervalRef.current = window.setInterval(() => {
-                  contentEl.scrollLeft -= SCROLL_SPEED;
-                }, 16);
-              } else if (e.clientX > contentRect.right - SCROLL_THRESHOLD && 
-                         contentEl.scrollLeft < contentEl.scrollWidth - contentEl.clientWidth) {
-                scrollIntervalRef.current = window.setInterval(() => {
-                  contentEl.scrollLeft += SCROLL_SPEED;
-                }, 16);
-              }
+          }
+          
+          // Auto-scroll for horizontal containers
+          if (container.direction === 'horizontal') {
+            if (e.clientX < rect.left + SCROLL_THRESHOLD && scrollEl.scrollLeft > 0) {
+              scrollIntervalRef.current = window.setInterval(() => {
+                scrollEl.scrollLeft -= SCROLL_SPEED;
+              }, 16);
+            } else if (e.clientX > rect.right - SCROLL_THRESHOLD && 
+                       scrollEl.scrollLeft < scrollEl.scrollWidth - scrollEl.clientWidth) {
+              scrollIntervalRef.current = window.setInterval(() => {
+                scrollEl.scrollLeft += SCROLL_SPEED;
+              }, 16);
             }
           }
         }
