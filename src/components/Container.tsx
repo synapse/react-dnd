@@ -1,8 +1,10 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, ElementType } from 'react';
 import { useDragDrop } from '../context/DragDropContext';
 import { DragDirection, ReorderResult, ItemMoveResult } from '../types';
 
 interface ContainerProps {
+  /** HTML element or component to render as (default: 'div') */
+  as?: ElementType;
   /** Unique identifier for this container */
   id: string;
   /** Type identifier - draggables must match this type */
@@ -19,9 +21,12 @@ interface ContainerProps {
   className?: string;
   /** Content to render (typically Draggable components) */
   children: React.ReactNode;
+  /** Any additional props to pass to the element */
+  [key: string]: unknown;
 }
 
 export function Container({ 
+  as: Component = 'div',
   id,
   type, 
   acceptsTypes,
@@ -30,9 +35,10 @@ export function Container({
   onItemMove,
   className = '',
   children,
+  ...rest
 }: ContainerProps) {
   const { dragState, registerContainer, unregisterContainer } = useDragDrop();
-  const containerRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLElement | null>(null);
   
   const acceptedTypes = acceptsTypes || [type];
 
@@ -58,14 +64,15 @@ export function Container({
   const directionClass = direction ? `container--${direction}` : '';
 
   return (
-    <div
+    <Component
       ref={containerRef}
       className={`container ${directionClass} ${isValidDropTarget ? 'container--active' : ''} ${className}`}
       data-container-id={id}
       data-type={type}
       data-direction={direction}
+      {...rest}
     >
       {children}
-    </div>
+    </Component>
   );
 }
