@@ -105,6 +105,23 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
     containers.current.delete(id);
   }, []);
 
+  // Capture positions for a single container
+  const captureContainerPositions = useCallback((containerId: string): OriginalItemData[] => {
+    const container = containers.current.get(containerId);
+    if (!container?.element) return [];
+    
+    const draggables = Array.from(
+      container.element.querySelectorAll(`[data-container-id="${containerId}"]`)
+    ) as HTMLElement[];
+    
+    return draggables.map((el, index) => ({
+      id: el.getAttribute('data-id')!,
+      index,
+      rect: el.getBoundingClientRect(),
+      element: el,
+    }));
+  }, []);
+
   // Capture original positions of all items in relevant containers
   const captureOriginalPositions = useCallback((draggedType: string) => {
     originalItemsRef.current.clear();
@@ -112,25 +129,27 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
     for (const [containerId, container] of containers.current.entries()) {
       if (!container.element || !container.acceptsTypes.includes(draggedType)) continue;
       
-      // Only get direct children draggables that belong to THIS container
-      const draggables = Array.from(
-        container.element.querySelectorAll(`[data-container-id="${containerId}"]`)
-      ) as HTMLElement[];
-      
-      const items: OriginalItemData[] = draggables.map((el, index) => ({
-        id: el.getAttribute('data-id')!,
-        index,
-        rect: el.getBoundingClientRect(),
-        element: el,
-      }));
-      
+      const items = captureContainerPositions(containerId);
       originalItemsRef.current.set(containerId, items);
     }
-  }, []);
+  }, [captureContainerPositions]);
+
+  // Get items for a container, capturing on-demand if not already captured
+  const getContainerItems = useCallback((containerId: string): OriginalItemData[] => {
+    let items = originalItemsRef.current.get(containerId);
+    
+    // If not captured yet (container might have been empty or registered late), capture now
+    if (items === undefined) {
+      items = captureContainerPositions(containerId);
+      originalItemsRef.current.set(containerId, items);
+    }
+    
+    return items;
+  }, [captureContainerPositions]);
 
   const clearAllTransforms = useCallback(() => {
     transformedElements.current.forEach(el => {
-      // First, disable transitions to prevent animation when clearing
+      // Disable transitions to prevent animation when clearing
       el.style.transition = 'none';
       el.style.transform = '';
       el.style.opacity = '';
@@ -138,14 +157,14 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
       // Force reflow to apply the changes immediately
       el.offsetHeight;
       
-      // Then clear the transition style completely
+      // Clear the transition style completely
       el.style.transition = '';
     });
     transformedElements.current.clear();
   }, []);
 
-  // Calculate preview index using original positions (not affected by transforms)
-  // Swap happens when dragged item's trailing edge passes 50% of the target item
+  // Calculate preview index - where the item would be inserted
+  // Uses 50% threshold: swap when dragged item's trailing edge passes target's midpoint
   const calculatePreviewIndex = useCallback((
     containerId: string,
     centerX: number,
@@ -153,20 +172,21 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
     draggedId: string
   ): number => {
     const container = containers.current.get(containerId);
-    const originalItems = originalItemsRef.current.get(containerId);
     const dragData = dragDataRef.current;
     
-    if (!container || !originalItems || originalItems.length === 0 || !dragData) return 0;
+    if (!container || !dragData) return 0;
+    
+    const originalItems = getContainerItems(containerId);
     
     // Filter out the dragged item for position calculations
     const items = originalItems.filter(item => item.id !== draggedId);
     
+    // Empty container - drop at index 0
     if (items.length === 0) return 0;
     
-    const direction = container.direction;
-    const isHorizontal = direction === 'horizontal';
+    const isHorizontal = container.direction === 'horizontal';
     
-    // Get dragged item's trailing edge
+    // Get dragged item's trailing edge (right for horizontal, bottom for vertical)
     const draggedHalfSize = isHorizontal ? dragData.itemSize.width / 2 : dragData.itemSize.height / 2;
     const dragTrailingEdge = isHorizontal ? centerX + draggedHalfSize : centerY + draggedHalfSize;
     
@@ -184,17 +204,18 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
       }
     }
     
+    // Passed all items - insert at end
     return items.length;
-  }, []);
+  }, [getContainerItems]);
 
-  // Apply transforms to show preview - uses only captured rect positions (layout-agnostic)
+  // Apply transforms to show visual preview of the reorder
   const applyTransforms = useCallback((
     targetContainerId: string | null,
     previewIndex: number,
     draggedId: string,
     sourceContainerId: string
   ) => {
-    // Only update if preview changed
+    // Skip if nothing changed
     if (
       previewStateRef.current.containerId === targetContainerId &&
       previewStateRef.current.index === previewIndex
@@ -213,46 +234,45 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
     if (!dragData) return;
     
     const container = containers.current.get(targetContainerId);
-    const originalItems = originalItemsRef.current.get(targetContainerId);
-    const sourceItems = originalItemsRef.current.get(sourceContainerId);
+    if (!container) return;
     
-    if (!container || !originalItems) return;
+    const targetItems = getContainerItems(targetContainerId);
+    const sourceItems = getContainerItems(sourceContainerId);
     
     const isSameContainer = targetContainerId === sourceContainerId;
-    const direction = container.direction;
-    const isHorizontal = direction === 'horizontal';
+    const isHorizontal = container.direction === 'horizontal';
     
     // Find the placeholder element (the dragged item's original element)
-    const placeholderItem = sourceItems?.find(item => item.id === draggedId);
+    const placeholderItem = sourceItems.find(item => item.id === draggedId);
     
     if (isSameContainer) {
-      // Same container reorder - calculate new positions based on actual rects
-      const draggedOriginalIndex = originalItems.findIndex(item => item.id === draggedId);
+      // === SAME CONTAINER REORDER ===
+      const draggedOriginalIndex = targetItems.findIndex(item => item.id === draggedId);
       
       if (draggedOriginalIndex === -1 || !placeholderItem) return;
       if (previewIndex === draggedOriginalIndex) return; // No change needed
       
       // Build the new order (what positions would look like after reorder)
-      const newOrder = originalItems
+      const newOrder = targetItems
         .filter(item => item.id !== draggedId)
         .map(item => ({ ...item }));
       
       // Insert placeholder at preview position
       newOrder.splice(previewIndex, 0, { ...placeholderItem, id: draggedId });
       
-      // Now calculate transforms: each item moves from its original position to its new position
-      originalItems.forEach((originalItem) => {
+      // Calculate transforms: each item moves from original position to new position
+      targetItems.forEach((originalItem) => {
         const newIndex = newOrder.findIndex(item => item.id === originalItem.id);
         if (newIndex === -1) return;
         
-        const newPositionItem = originalItems[newIndex];
-        if (!newPositionItem) return;
+        const targetPosition = targetItems[newIndex];
+        if (!targetPosition) return;
         
-        // Calculate the pixel difference between original and target positions
-        const deltaX = newPositionItem.rect.left - originalItem.rect.left;
-        const deltaY = newPositionItem.rect.top - originalItem.rect.top;
+        // Calculate pixel difference between original and target positions
+        const deltaX = targetPosition.rect.left - originalItem.rect.left;
+        const deltaY = targetPosition.rect.top - originalItem.rect.top;
         
-        // Only apply transform if there's actual movement
+        // Apply transform if there's movement
         if (deltaX !== 0 || deltaY !== 0) {
           const transform = isHorizontal
             ? `translateX(${deltaX}px)`
@@ -264,25 +284,23 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
         }
       });
     } else {
-      // Cross-container move
+      // === CROSS-CONTAINER MOVE ===
       const sourceContainer = containers.current.get(sourceContainerId);
-      const sourceDirection = sourceContainer?.direction;
-      const isSourceHorizontal = sourceDirection === 'horizontal';
+      const isSourceHorizontal = sourceContainer?.direction === 'horizontal';
       
-      // In source container: collapse items to fill the gap
-      if (sourceItems && placeholderItem) {
+      // 1. In source container: collapse items to fill the gap
+      if (placeholderItem) {
         const draggedOriginalIndex = sourceItems.findIndex(item => item.id === draggedId);
         
-        // Hide the placeholder
+        // Hide the placeholder (the original element being dragged)
         placeholderItem.element.style.transition = 'opacity 0.2s ease';
         placeholderItem.element.style.opacity = '0';
         transformedElements.current.add(placeholderItem.element);
         
-        // Shift items to their new positions
+        // Shift items after the dragged item to fill the gap
         sourceItems.forEach((originalItem) => {
           if (originalItem.id === draggedId) return;
           
-          // Items after the dragged item shift to fill the gap
           if (originalItem.index > draggedOriginalIndex) {
             const prevItem = sourceItems[originalItem.index - 1];
             if (prevItem) {
@@ -303,23 +321,23 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
         });
       }
       
-      // In target container: shift items to make room
-      if (originalItems.length > 0) {
-        // Calculate how much space the dragged item needs (use its actual size)
+      // 2. In target container: shift items to make room for the incoming item
+      if (targetItems.length > 0) {
+        // Calculate space needed (dragged item size + gap)
         const draggedSize = isHorizontal ? dragData.itemSize.width : dragData.itemSize.height;
         
-        // Estimate gap from target container (if possible)
+        // Estimate gap from target container
         let gap = 0;
-        if (originalItems.length >= 2) {
+        if (targetItems.length >= 2) {
           gap = isHorizontal
-            ? originalItems[1].rect.left - originalItems[0].rect.right
-            : originalItems[1].rect.top - originalItems[0].rect.bottom;
+            ? targetItems[1].rect.left - targetItems[0].rect.right
+            : targetItems[1].rect.top - targetItems[0].rect.bottom;
         }
         const shiftAmount = draggedSize + Math.max(0, gap);
         
         // Shift items at and after preview index
-        originalItems.forEach((item, originalIndex) => {
-          if (originalIndex >= previewIndex) {
+        targetItems.forEach((item, idx) => {
+          if (idx >= previewIndex) {
             const transform = isHorizontal
               ? `translateX(${shiftAmount}px)`
               : `translateY(${shiftAmount}px)`;
@@ -330,8 +348,9 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
           }
         });
       }
+      // For empty target containers, no transforms needed - just drop at index 0
     }
-  }, [clearAllTransforms]);
+  }, [clearAllTransforms, getContainerItems]);
 
   const handleDrop = useCallback((targetContainerId: string | null, previewIndex: number) => {
     const dragData = dragDataRef.current;
@@ -492,6 +511,7 @@ function DragPortal({
       let targetContainerId: string | null = null;
       let smallestArea = Infinity;
       
+      // Clear any existing scroll interval
       if (scrollIntervalRef.current) {
         clearInterval(scrollIntervalRef.current);
         scrollIntervalRef.current = null;
@@ -504,6 +524,7 @@ function DragPortal({
         const rect = container.element.getBoundingClientRect();
         const area = rect.width * rect.height;
         
+        // Check if mouse is inside this container
         if (
           e.clientX >= rect.left &&
           e.clientX <= rect.right &&
@@ -514,9 +535,13 @@ function DragPortal({
           smallestArea = area;
           targetContainerId = id;
           
-          // Auto-scroll
+          // Auto-scroll for scrollable containers
           const scrollEl = container.element;
-          if (container.direction === 'vertical' || !container.direction) {
+          const canScrollVertically = scrollEl.scrollHeight > scrollEl.clientHeight;
+          const canScrollHorizontally = scrollEl.scrollWidth > scrollEl.clientWidth;
+          
+          // Vertical auto-scroll
+          if (canScrollVertically && (container.direction === 'vertical' || !container.direction)) {
             if (e.clientY < rect.top + SCROLL_THRESHOLD && scrollEl.scrollTop > 0) {
               scrollIntervalRef.current = window.setInterval(() => {
                 scrollEl.scrollTop -= SCROLL_SPEED;
@@ -529,7 +554,8 @@ function DragPortal({
             }
           }
           
-          if (container.direction === 'horizontal') {
+          // Horizontal auto-scroll
+          if (canScrollHorizontally && container.direction === 'horizontal') {
             if (e.clientX < rect.left + SCROLL_THRESHOLD && scrollEl.scrollLeft > 0) {
               scrollIntervalRef.current = window.setInterval(() => {
                 scrollEl.scrollLeft -= SCROLL_SPEED;
