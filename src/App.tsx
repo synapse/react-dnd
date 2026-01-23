@@ -2,6 +2,7 @@ import { useState, useCallback } from "react";
 import { Container } from "./components/Container";
 import { Draggable } from "./components/Draggable";
 import { DragDropProvider } from "./context/DragDropContext";
+import { ReorderResult, ItemMoveResult } from "./types";
 import "./index.css";
 
 interface KanbanCard {
@@ -114,6 +115,14 @@ const initialColumnCards: Record<string, string[]> = {
   done: ["card-13", "card-14"],
 };
 
+// Helper to reorder an array
+function reorderArray<T>(array: T[], fromIndex: number, toIndex: number): T[] {
+  const result = [...array];
+  const [removed] = result.splice(fromIndex, 1);
+  result.splice(toIndex, 0, removed);
+  return result;
+}
+
 function KanbanCardContent({ card }: { card: KanbanCard }) {
   return (
     <>
@@ -145,46 +154,40 @@ function App() {
     [cards],
   );
 
-  const handleColumnReorder = useCallback((newOrder: string[]) => {
-    setColumnOrder(newOrder);
+  // Handle column reorder (called once on drop)
+  const handleColumnReorder = useCallback((result: ReorderResult) => {
+    setColumnOrder((prev) => reorderArray(prev, result.fromIndex, result.toIndex));
   }, []);
 
+  // Handle card reorder within same column (called once on drop)
   const handleCardReorder = useCallback(
-    (columnId: string, newCardIds: string[]) => {
+    (columnId: string, result: ReorderResult) => {
       setColumnCards((prev) => ({
         ...prev,
-        [columnId]: newCardIds,
+        [columnId]: reorderArray(prev[columnId], result.fromIndex, result.toIndex),
       }));
     },
     [],
   );
 
-  // Unified handler for moving cards between columns
-  const handleCardMove = useCallback(
-    (
-      cardId: string,
-      fromColumnId: string,
-      toColumnId: string,
-      atIndex: number,
-    ) => {
-      setColumnCards((prev) => {
-        const newState = { ...prev };
+  // Handle card move between columns (called once on drop)
+  const handleCardMove = useCallback((result: ItemMoveResult) => {
+    setColumnCards((prev) => {
+      const newState = { ...prev };
 
-        // Remove from source column
-        newState[fromColumnId] = prev[fromColumnId].filter(
-          (id) => id !== cardId,
-        );
+      // Remove from source column
+      const sourceCards = [...prev[result.fromContainerId]];
+      sourceCards.splice(result.fromIndex, 1);
+      newState[result.fromContainerId] = sourceCards;
 
-        // Add to target column at specified index
-        const targetCards = [...(prev[toColumnId] || [])];
-        targetCards.splice(atIndex, 0, cardId);
-        newState[toColumnId] = targetCards;
+      // Add to target column at specified index
+      const targetCards = [...(prev[result.toContainerId] || [])];
+      targetCards.splice(result.toIndex, 0, result.itemId);
+      newState[result.toContainerId] = targetCards;
 
-        return newState;
-      });
-    },
-    [],
-  );
+      return newState;
+    });
+  }, []);
 
   return (
     <DragDropProvider>
@@ -201,7 +204,6 @@ function App() {
           id="board"
           type="column"
           direction="horizontal"
-          items={columnOrder}
           onReorder={handleColumnReorder}
           className="kanban__board"
         >
@@ -233,10 +235,7 @@ function App() {
                     type="card"
                     acceptsTypes={["card"]}
                     direction="vertical"
-                    items={cardIds}
-                    onReorder={(newItems) =>
-                      handleCardReorder(columnId, newItems)
-                    }
+                    onReorder={(result) => handleCardReorder(columnId, result)}
                     onItemMove={handleCardMove}
                     className="kanban__column-content"
                   >
@@ -267,7 +266,6 @@ function App() {
           id="column-order2"
           type="column2"
           direction="vertical"
-          items={columnOrder}
           onReorder={handleColumnReorder}
           className="demo-vertical-list"
         >

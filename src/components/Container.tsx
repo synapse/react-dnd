@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useDragDrop } from '../context/DragDropContext';
-import { DragDirection } from '../types';
+import { DragDirection, ReorderResult, ItemMoveResult } from '../types';
 
 interface ContainerProps {
   /** Unique identifier for this container */
@@ -11,12 +11,10 @@ interface ContainerProps {
   acceptsTypes?: string[];
   /** Optional direction constraint: 'horizontal' or 'vertical' */
   direction?: DragDirection;
-  /** Array of item IDs in current order */
-  items: string[];
-  /** Callback when items are reordered within this container */
-  onReorder: (items: string[]) => void;
-  /** Callback when an item moves from another container into this one */
-  onItemMove?: (itemId: string, fromContainerId: string, toContainerId: string, atIndex: number) => void;
+  /** Callback when items are reordered within this container (called on drop) */
+  onReorder?: (result: ReorderResult) => void;
+  /** Callback when an item moves from another container into this one (called on drop) */
+  onItemMove?: (result: ItemMoveResult) => void;
   /** Additional CSS class names */
   className?: string;
   /** Content to render (typically Draggable components) */
@@ -28,7 +26,6 @@ export function Container({
   type, 
   acceptsTypes,
   direction, 
-  items,
   onReorder,
   onItemMove,
   className = '',
@@ -44,12 +41,11 @@ export function Container({
       id, 
       acceptedTypes, 
       direction, 
-      items, 
-      onReorder, 
       containerRef.current,
+      onReorder,
       onItemMove
     );
-  }, [id, acceptedTypes, direction, items, onReorder, onItemMove, registerContainer]);
+  }, [id, acceptedTypes, direction, onReorder, onItemMove, registerContainer]);
 
   useEffect(() => {
     return () => unregisterContainer(id);

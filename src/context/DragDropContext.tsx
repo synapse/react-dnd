@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { DragDirection } from '../types';
+import { DragDirection, ReorderResult, ItemMoveResult } from '../types';
 
 interface DragState {
   isDragging: boolean;
@@ -13,10 +13,9 @@ interface ContainerData {
   id: string;
   direction?: DragDirection;
   acceptsTypes: string[];
-  items: string[];
-  onReorder: (items: string[]) => void;
-  onItemMove?: (itemId: string, fromContainerId: string, toContainerId: string, atIndex: number) => void;
   element: HTMLElement | null;
+  onReorder?: (result: ReorderResult) => void;
+  onItemMove?: (result: ItemMoveResult) => void;
 }
 
 interface DragDropContextValue {
@@ -33,10 +32,9 @@ interface DragDropContextValue {
     id: string,
     acceptsTypes: string[],
     direction: DragDirection | undefined, 
-    items: string[], 
-    onReorder: (items: string[]) => void,
     element: HTMLElement | null,
-    onItemMove?: (itemId: string, fromContainerId: string, toContainerId: string, atIndex: number) => void
+    onReorder?: (result: ReorderResult) => void,
+    onItemMove?: (result: ItemMoveResult) => void
   ) => void;
   unregisterContainer: (id: string) => void;
 }
@@ -53,22 +51,421 @@ const DragDropContext = createContext<DragDropContextValue | null>(null);
 const SCROLL_THRESHOLD = 60;
 const SCROLL_SPEED = 15;
 
+// Store original item data at drag start
+interface OriginalItemData {
+  id: string;
+  index: number;
+  rect: DOMRect;
+  element: HTMLElement;
+}
+
+export function DragDropProvider({ children }: { children: React.ReactNode }) {
+  const [dragState, setDragState] = useState<DragState>(initialDragState);
+  const [portalContent, setPortalContent] = useState<React.ReactNode | null>(null);
+  const [portalRect, setPortalRect] = useState<DOMRect | null>(null);
+  
+  const containers = useRef<Map<string, ContainerData>>(new Map());
+  
+  // Drag session data
+  const dragDataRef = useRef<{ 
+    id: string; 
+    type: string; 
+    sourceContainerId: string;
+    sourceIndex: number;
+    itemSize: { width: number; height: number };
+  } | null>(null);
+  
+  // Original positions captured at drag start (before any transforms)
+  const originalItemsRef = useRef<Map<string, OriginalItemData[]>>(new Map());
+  
+  // Track current preview state
+  const previewStateRef = useRef<{ containerId: string | null; index: number }>({ 
+    containerId: null, 
+    index: -1 
+  });
+  
+  // Track transformed elements for cleanup
+  const transformedElements = useRef<Set<HTMLElement>>(new Set());
+
+  const registerContainer = useCallback(
+    (
+      id: string,
+      acceptsTypes: string[],
+      direction: DragDirection | undefined, 
+      element: HTMLElement | null,
+      onReorder?: (result: ReorderResult) => void,
+      onItemMove?: (result: ItemMoveResult) => void
+    ) => {
+      containers.current.set(id, { id, acceptsTypes, direction, element, onReorder, onItemMove });
+    },
+    []
+  );
+
+  const unregisterContainer = useCallback((id: string) => {
+    containers.current.delete(id);
+  }, []);
+
+  // Capture original positions of all items in relevant containers
+  const captureOriginalPositions = useCallback((draggedType: string) => {
+    originalItemsRef.current.clear();
+    
+    for (const [containerId, container] of containers.current.entries()) {
+      if (!container.element || !container.acceptsTypes.includes(draggedType)) continue;
+      
+      // Only get direct children draggables that belong to THIS container
+      const draggables = Array.from(
+        container.element.querySelectorAll(`[data-container-id="${containerId}"]`)
+      ) as HTMLElement[];
+      
+      const items: OriginalItemData[] = draggables.map((el, index) => ({
+        id: el.getAttribute('data-id')!,
+        index,
+        rect: el.getBoundingClientRect(),
+        element: el,
+      }));
+      
+      originalItemsRef.current.set(containerId, items);
+    }
+  }, []);
+
+  const clearAllTransforms = useCallback(() => {
+    transformedElements.current.forEach(el => {
+      el.style.transform = '';
+      el.style.transition = '';
+      el.style.opacity = '';
+    });
+    transformedElements.current.clear();
+  }, []);
+
+  // Calculate preview index using original positions (not affected by transforms)
+  const calculatePreviewIndex = useCallback((
+    containerId: string,
+    centerX: number,
+    centerY: number,
+    draggedId: string
+  ): number => {
+    const container = containers.current.get(containerId);
+    const originalItems = originalItemsRef.current.get(containerId);
+    
+    if (!container || !originalItems || originalItems.length === 0) return 0;
+    
+    // Filter out the dragged item for position calculations
+    const items = originalItems.filter(item => item.id !== draggedId);
+    
+    if (items.length === 0) return 0;
+    
+    const direction = container.direction;
+    
+    for (let i = 0; i < items.length; i++) {
+      const { rect } = items[i];
+      const itemCenterX = rect.left + rect.width / 2;
+      const itemCenterY = rect.top + rect.height / 2;
+      
+      if (direction === 'horizontal') {
+        if (centerX < itemCenterX) return i;
+      } else {
+        if (centerY < itemCenterY) return i;
+      }
+    }
+    
+    return items.length;
+  }, []);
+
+  // Apply transforms to show preview - uses only captured rect positions (layout-agnostic)
+  const applyTransforms = useCallback((
+    targetContainerId: string | null,
+    previewIndex: number,
+    draggedId: string,
+    sourceContainerId: string
+  ) => {
+    // Only update if preview changed
+    if (
+      previewStateRef.current.containerId === targetContainerId &&
+      previewStateRef.current.index === previewIndex
+    ) {
+      return;
+    }
+    
+    previewStateRef.current = { containerId: targetContainerId, index: previewIndex };
+    
+    // Clear all transforms first
+    clearAllTransforms();
+    
+    if (!targetContainerId) return;
+    
+    const dragData = dragDataRef.current;
+    if (!dragData) return;
+    
+    const container = containers.current.get(targetContainerId);
+    const originalItems = originalItemsRef.current.get(targetContainerId);
+    const sourceItems = originalItemsRef.current.get(sourceContainerId);
+    
+    if (!container || !originalItems) return;
+    
+    const isSameContainer = targetContainerId === sourceContainerId;
+    const direction = container.direction;
+    const isHorizontal = direction === 'horizontal';
+    
+    // Find the placeholder element (the dragged item's original element)
+    const placeholderItem = sourceItems?.find(item => item.id === draggedId);
+    
+    if (isSameContainer) {
+      // Same container reorder - calculate new positions based on actual rects
+      const draggedOriginalIndex = originalItems.findIndex(item => item.id === draggedId);
+      
+      if (draggedOriginalIndex === -1 || !placeholderItem) return;
+      if (previewIndex === draggedOriginalIndex) return; // No change needed
+      
+      // Build the new order (what positions would look like after reorder)
+      const newOrder = originalItems
+        .filter(item => item.id !== draggedId)
+        .map(item => ({ ...item }));
+      
+      // Insert placeholder at preview position
+      newOrder.splice(previewIndex, 0, { ...placeholderItem, id: draggedId });
+      
+      // Now calculate transforms: each item moves from its original position to its new position
+      originalItems.forEach((originalItem) => {
+        const newIndex = newOrder.findIndex(item => item.id === originalItem.id);
+        if (newIndex === -1) return;
+        
+        const newPositionItem = originalItems[newIndex];
+        if (!newPositionItem) return;
+        
+        // Calculate the pixel difference between original and target positions
+        const deltaX = newPositionItem.rect.left - originalItem.rect.left;
+        const deltaY = newPositionItem.rect.top - originalItem.rect.top;
+        
+        // Only apply transform if there's actual movement
+        if (deltaX !== 0 || deltaY !== 0) {
+          const transform = isHorizontal
+            ? `translateX(${deltaX}px)`
+            : `translateY(${deltaY}px)`;
+          
+          originalItem.element.style.transition = 'transform 0.2s cubic-bezier(0.2, 0, 0, 1)';
+          originalItem.element.style.transform = transform;
+          transformedElements.current.add(originalItem.element);
+        }
+      });
+    } else {
+      // Cross-container move
+      const sourceContainer = containers.current.get(sourceContainerId);
+      const sourceDirection = sourceContainer?.direction;
+      const isSourceHorizontal = sourceDirection === 'horizontal';
+      
+      // In source container: collapse items to fill the gap
+      if (sourceItems && placeholderItem) {
+        const draggedOriginalIndex = sourceItems.findIndex(item => item.id === draggedId);
+        
+        // Hide the placeholder
+        placeholderItem.element.style.transition = 'opacity 0.2s ease';
+        placeholderItem.element.style.opacity = '0';
+        transformedElements.current.add(placeholderItem.element);
+        
+        // Build new order for source (without dragged item)
+        const sourceNewOrder = sourceItems.filter(item => item.id !== draggedId);
+        
+        // Shift items to their new positions
+        sourceItems.forEach((originalItem) => {
+          if (originalItem.id === draggedId) return;
+          
+          const newIndex = sourceNewOrder.findIndex(item => item.id === originalItem.id);
+          if (newIndex === -1) return;
+          
+          // The new position is where the item at newIndex originally was
+          // But we need to account for the gap left by the dragged item
+          const targetRect = sourceItems[newIndex >= draggedOriginalIndex ? newIndex : newIndex]?.rect;
+          if (!targetRect) return;
+          
+          // Items after the dragged item shift to fill the gap
+          if (originalItem.index > draggedOriginalIndex) {
+            const prevItem = sourceItems[originalItem.index - 1];
+            if (prevItem) {
+              const deltaX = prevItem.rect.left - originalItem.rect.left;
+              const deltaY = prevItem.rect.top - originalItem.rect.top;
+              
+              if (deltaX !== 0 || deltaY !== 0) {
+                const transform = isSourceHorizontal
+                  ? `translateX(${deltaX}px)`
+                  : `translateY(${deltaY}px)`;
+                
+                originalItem.element.style.transition = 'transform 0.2s cubic-bezier(0.2, 0, 0, 1)';
+                originalItem.element.style.transform = transform;
+                transformedElements.current.add(originalItem.element);
+              }
+            }
+          }
+        });
+      }
+      
+      // In target container: shift items to make room
+      if (originalItems.length > 0) {
+        // Calculate how much space the dragged item needs (use its actual size)
+        const draggedSize = isHorizontal ? dragData.itemSize.width : dragData.itemSize.height;
+        
+        // Estimate gap from target container (if possible)
+        let gap = 0;
+        if (originalItems.length >= 2) {
+          gap = isHorizontal
+            ? originalItems[1].rect.left - originalItems[0].rect.right
+            : originalItems[1].rect.top - originalItems[0].rect.bottom;
+        }
+        const shiftAmount = draggedSize + Math.max(0, gap);
+        
+        // Shift items at and after preview index
+        originalItems.forEach((item, originalIndex) => {
+          if (originalIndex >= previewIndex) {
+            const transform = isHorizontal
+              ? `translateX(${shiftAmount}px)`
+              : `translateY(${shiftAmount}px)`;
+            
+            item.element.style.transition = 'transform 0.2s cubic-bezier(0.2, 0, 0, 1)';
+            item.element.style.transform = transform;
+            transformedElements.current.add(item.element);
+          }
+        });
+      }
+    }
+  }, [clearAllTransforms]);
+
+  const handleDrop = useCallback((targetContainerId: string | null, previewIndex: number) => {
+    const dragData = dragDataRef.current;
+    
+    if (dragData && targetContainerId) {
+      const sourceContainer = containers.current.get(dragData.sourceContainerId);
+      const targetContainer = containers.current.get(targetContainerId);
+
+      if (targetContainerId === dragData.sourceContainerId) {
+        // Same container reorder
+        if (previewIndex !== dragData.sourceIndex && sourceContainer?.onReorder) {
+          sourceContainer.onReorder({
+            itemId: dragData.id,
+            fromIndex: dragData.sourceIndex,
+            toIndex: previewIndex,
+          });
+        }
+      } else {
+        // Cross-container move
+        if (targetContainer?.onItemMove) {
+          targetContainer.onItemMove({
+            itemId: dragData.id,
+            fromContainerId: dragData.sourceContainerId,
+            toContainerId: targetContainerId,
+            fromIndex: dragData.sourceIndex,
+            toIndex: previewIndex,
+          });
+        }
+      }
+    }
+
+    // Clean up
+    clearAllTransforms();
+    setDragState(initialDragState);
+    setPortalContent(null);
+    setPortalRect(null);
+    dragDataRef.current = null;
+    originalItemsRef.current.clear();
+    previewStateRef.current = { containerId: null, index: -1 };
+  }, [clearAllTransforms]);
+
+  const startDrag = useCallback((
+    id: string, 
+    type: string,
+    containerId: string,
+    e: React.MouseEvent, 
+    element: HTMLElement,
+    content: React.ReactNode
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const rect = element.getBoundingClientRect();
+    
+    // Capture original positions BEFORE setting drag state
+    captureOriginalPositions(type);
+    
+    // Find source index from captured positions
+    const sourceItems = originalItemsRef.current.get(containerId);
+    const sourceIndex = sourceItems?.findIndex(item => item.id === id) ?? 0;
+
+    dragDataRef.current = { 
+      id, 
+      type, 
+      sourceContainerId: containerId, 
+      sourceIndex,
+      itemSize: { width: rect.width, height: rect.height }
+    };
+    
+    previewStateRef.current = { containerId, index: sourceIndex };
+    
+    setDragState({
+      isDragging: true,
+      draggedId: id,
+      draggedType: type,
+      sourceContainerId: containerId,
+    });
+    
+    setPortalRect(rect);
+    setPortalContent(content);
+  }, [captureOriginalPositions]);
+
+  return (
+    <DragDropContext.Provider
+      value={{
+        dragState,
+        startDrag,
+        registerContainer,
+        unregisterContainer,
+      }}
+    >
+      {children}
+      {dragState.isDragging && portalContent && portalRect && dragState.draggedType && dragState.draggedId && dragState.sourceContainerId && (
+        <DragPortal 
+          initialRect={portalRect}
+          containers={containers}
+          draggedId={dragState.draggedId}
+          draggedType={dragState.draggedType}
+          sourceContainerId={dragState.sourceContainerId}
+          calculatePreviewIndex={calculatePreviewIndex}
+          applyTransforms={applyTransforms}
+          onDrop={handleDrop}
+        >
+          {portalContent}
+        </DragPortal>
+      )}
+    </DragDropContext.Provider>
+  );
+}
+
+// Separate portal component to handle mouse tracking
 function DragPortal({ 
   children, 
   initialRect,
-  onPositionChange,
   containers,
+  draggedId,
   draggedType,
+  sourceContainerId,
+  calculatePreviewIndex,
+  applyTransforms,
+  onDrop,
 }: { 
   children: React.ReactNode;
   initialRect: DOMRect;
-  onPositionChange: (x: number, y: number, targetContainerId: string | null) => void;
   containers: React.MutableRefObject<Map<string, ContainerData>>;
+  draggedId: string;
   draggedType: string;
+  sourceContainerId: string;
+  calculatePreviewIndex: (containerId: string, centerX: number, centerY: number, draggedId: string) => number;
+  applyTransforms: (targetContainerId: string | null, previewIndex: number, draggedId: string, sourceContainerId: string) => void;
+  onDrop: (targetContainerId: string | null, previewIndex: number) => void;
 }) {
   const startMouseRef = useRef<{ x: number; y: number } | null>(null);
   const [position, setPosition] = useState({ x: initialRect.left, y: initialRect.top });
   const scrollIntervalRef = useRef<number | null>(null);
+  const currentTargetRef = useRef<{ containerId: string | null; previewIndex: number }>({ 
+    containerId: sourceContainerId, 
+    previewIndex: -1 
+  });
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -79,8 +476,6 @@ function DragPortal({
       const deltaX = e.clientX - startMouseRef.current.x;
       const deltaY = e.clientY - startMouseRef.current.y;
 
-      // Always allow free movement for the visual drag
-      // Direction constraints only apply to reordering logic, not visual movement
       const newX = initialRect.left + deltaX;
       const newY = initialRect.top + deltaY;
 
@@ -114,10 +509,8 @@ function DragPortal({
           smallestArea = area;
           targetContainerId = id;
           
-          // Auto-scroll using the container element directly
+          // Auto-scroll
           const scrollEl = container.element;
-          
-          // Auto-scroll for vertical containers
           if (container.direction === 'vertical' || !container.direction) {
             if (e.clientY < rect.top + SCROLL_THRESHOLD && scrollEl.scrollTop > 0) {
               scrollIntervalRef.current = window.setInterval(() => {
@@ -131,7 +524,6 @@ function DragPortal({
             }
           }
           
-          // Auto-scroll for horizontal containers
           if (container.direction === 'horizontal') {
             if (e.clientX < rect.left + SCROLL_THRESHOLD && scrollEl.scrollLeft > 0) {
               scrollIntervalRef.current = window.setInterval(() => {
@@ -147,13 +539,21 @@ function DragPortal({
         }
       }
       
-      onPositionChange(centerX, centerY, targetContainerId);
+      // Calculate preview index if we have a target container
+      let previewIndex = 0;
+      if (targetContainerId) {
+        previewIndex = calculatePreviewIndex(targetContainerId, centerX, centerY, draggedId);
+      }
+      
+      currentTargetRef.current = { containerId: targetContainerId, previewIndex };
+      applyTransforms(targetContainerId, previewIndex, draggedId, sourceContainerId);
     };
 
     const handleMouseUp = () => {
       if (scrollIntervalRef.current) {
         clearInterval(scrollIntervalRef.current);
       }
+      onDrop(currentTargetRef.current.containerId, currentTargetRef.current.previewIndex);
     };
 
     document.addEventListener('mousemove', handleMouseMove);
@@ -166,7 +566,7 @@ function DragPortal({
         clearInterval(scrollIntervalRef.current);
       }
     };
-  }, [initialRect, onPositionChange, containers, draggedType]);
+  }, [initialRect, containers, draggedType, draggedId, sourceContainerId, calculatePreviewIndex, applyTransforms, onDrop]);
 
   return createPortal(
     <div
@@ -183,290 +583,6 @@ function DragPortal({
       {children}
     </div>,
     document.body
-  );
-}
-
-export function DragDropProvider({ children }: { children: React.ReactNode }) {
-  const [dragState, setDragState] = useState<DragState>(initialDragState);
-  const [portalContent, setPortalContent] = useState<React.ReactNode | null>(null);
-  const [portalRect, setPortalRect] = useState<DOMRect | null>(null);
-  
-  const containers = useRef<Map<string, ContainerData>>(new Map());
-  const itemRects = useRef<Map<string, DOMRect>>(new Map());
-  const dragDataRef = useRef<{ id: string; type: string; currentContainerId: string } | null>(null);
-  const lastReorderTime = useRef<number>(0);
-
-  const registerContainer = useCallback(
-    (
-      id: string,
-      acceptsTypes: string[],
-      direction: DragDirection | undefined, 
-      items: string[], 
-      onReorder: (items: string[]) => void,
-      element: HTMLElement | null,
-      onItemMove?: (itemId: string, fromContainerId: string, toContainerId: string, atIndex: number) => void
-    ) => {
-      containers.current.set(id, { id, acceptsTypes, direction, items, onReorder, element, onItemMove });
-    },
-    []
-  );
-
-  const unregisterContainer = useCallback((id: string) => {
-    containers.current.delete(id);
-  }, []);
-
-  // Helper to create a unique key for item rects (container + item)
-  const getItemKey = useCallback((containerId: string, itemId: string) => {
-    return `${containerId}:${itemId}`;
-  }, []);
-
-  // Helper to query an element by container ID and item ID
-  const queryItem = useCallback((containerId: string, itemId: string): HTMLElement | null => {
-    return document.querySelector(`[data-container-id="${containerId}"][data-id="${itemId}"]`);
-  }, []);
-
-  const updateItemRects = useCallback((containerId: string) => {
-    const container = containers.current.get(containerId);
-    if (!container) return;
-    
-    container.items.forEach((itemId) => {
-      const itemEl = queryItem(containerId, itemId);
-      if (itemEl) {
-        itemRects.current.set(getItemKey(containerId, itemId), itemEl.getBoundingClientRect());
-      }
-    });
-  }, [getItemKey, queryItem]);
-
-  const findInsertionIndex = useCallback((
-    centerX: number,
-    centerY: number,
-    containerId: string,
-    items: string[],
-    draggedId: string,
-    direction?: DragDirection
-  ): number => {
-    const filteredItems = items.filter(id => id !== draggedId);
-    
-    if (filteredItems.length === 0) return 0;
-    
-    for (let i = 0; i < filteredItems.length; i++) {
-      const rect = itemRects.current.get(getItemKey(containerId, filteredItems[i]));
-      if (!rect) continue;
-      
-      const itemCenterY = rect.top + rect.height / 2;
-      const itemCenterX = rect.left + rect.width / 2;
-      
-      if (direction === 'horizontal') {
-        if (centerX < itemCenterX) return i;
-      } else if (direction === 'vertical') {
-        if (centerY < itemCenterY) return i;
-      } else {
-        if (centerY < rect.top) return i;
-        if (centerY < rect.bottom && centerX < itemCenterX) return i;
-      }
-    }
-    
-    return filteredItems.length;
-  }, [getItemKey]);
-
-  // FLIP animation helper - captures positions before DOM change and animates after
-  const animateReorder = useCallback((containerId: string, draggedId: string) => {
-    const container = containers.current.get(containerId);
-    if (!container) return;
-
-    // Capture "First" positions before the DOM updates
-    const firstPositions = new Map<string, DOMRect>();
-    container.items.forEach((itemId) => {
-      if (itemId === draggedId) return; // Skip the dragged item
-      const el = queryItem(containerId, itemId);
-      if (el) {
-        firstPositions.set(itemId, el.getBoundingClientRect());
-      }
-    });
-
-    // Return function to be called after state update
-    return () => {
-      requestAnimationFrame(() => {
-        container.items.forEach((itemId) => {
-          if (itemId === draggedId) return;
-          const el = queryItem(containerId, itemId);
-          if (!el) return;
-
-          const first = firstPositions.get(itemId);
-          if (!first) return;
-
-          // "Last" position after DOM change
-          const last = el.getBoundingClientRect();
-
-          // "Invert" - calculate the difference
-          const deltaX = first.left - last.left;
-          const deltaY = first.top - last.top;
-
-          if (deltaX === 0 && deltaY === 0) return;
-
-          // Apply inverse transform immediately (no transition)
-          el.style.transition = 'none';
-          el.style.transform = `translate(${deltaX}px, ${deltaY}px)`;
-
-          // Force reflow
-          el.offsetHeight;
-
-          // "Play" - animate back to final position
-          el.style.transition = 'transform 0.25s cubic-bezier(0.2, 0, 0, 1)';
-          el.style.transform = '';
-
-          // Clean up after animation
-          const cleanup = () => {
-            el.style.transition = '';
-            el.style.transform = '';
-            el.removeEventListener('transitionend', cleanup);
-          };
-          el.addEventListener('transitionend', cleanup);
-        });
-      });
-    };
-  }, [queryItem]);
-
-  const handleReorder = useCallback((centerX: number, centerY: number, targetContainerId: string | null) => {
-    const dragData = dragDataRef.current;
-    if (!dragData || !targetContainerId) return;
-
-    const now = Date.now();
-    if (now - lastReorderTime.current < 100) return;
-
-    const targetContainer = containers.current.get(targetContainerId);
-    if (!targetContainer) return;
-
-    // Update rects for target container
-    updateItemRects(targetContainerId);
-
-    const isMovingToNewContainer = targetContainerId !== dragData.currentContainerId;
-    const currentIndex = targetContainer.items.indexOf(dragData.id);
-    
-    const insertIndex = findInsertionIndex(
-      centerX,
-      centerY,
-      targetContainerId,
-      targetContainer.items,
-      dragData.id,
-      targetContainer.direction
-    );
-
-    // Cross-container move
-    if (isMovingToNewContainer) {
-      lastReorderTime.current = now;
-      
-      // Capture positions before move for both containers
-      const sourceContainer = containers.current.get(dragData.currentContainerId);
-      const animateSource = sourceContainer ? animateReorder(dragData.currentContainerId, dragData.id) : null;
-      const animateTarget = animateReorder(targetContainerId, dragData.id);
-      
-      if (targetContainer.onItemMove) {
-        targetContainer.onItemMove(dragData.id, dragData.currentContainerId, targetContainerId, insertIndex);
-      }
-      
-      dragData.currentContainerId = targetContainerId;
-      
-      // Run FLIP animations after state update
-      requestAnimationFrame(() => {
-        animateSource?.();
-        animateTarget?.();
-        updateItemRects(targetContainerId);
-      });
-      
-      return;
-    }
-
-    // Same container reorder
-    if (currentIndex !== -1 && insertIndex !== currentIndex) {
-      lastReorderTime.current = now;
-      
-      // Capture positions before reorder (FLIP - First)
-      const playAnimation = animateReorder(targetContainerId, dragData.id);
-      
-      const newItems = [...targetContainer.items];
-      newItems.splice(currentIndex, 1);
-      newItems.splice(insertIndex, 0, dragData.id);
-      targetContainer.onReorder(newItems);
-
-      // Run FLIP animation after state update (Last, Invert, Play)
-      requestAnimationFrame(() => {
-        playAnimation?.();
-        updateItemRects(targetContainerId);
-      });
-    }
-  }, [findInsertionIndex, updateItemRects, animateReorder]);
-
-  const handleMouseUp = useCallback(() => {
-    setDragState(initialDragState);
-    setPortalContent(null);
-    setPortalRect(null);
-    dragDataRef.current = null;
-    itemRects.current.clear();
-    lastReorderTime.current = 0;
-    document.removeEventListener('mouseup', handleMouseUp);
-  }, []);
-
-  const startDrag = useCallback((
-    id: string, 
-    type: string,
-    containerId: string,
-    e: React.MouseEvent, 
-    element: HTMLElement,
-    content: React.ReactNode
-  ) => {
-    e.preventDefault();
-    e.stopPropagation();
-    
-    const rect = element.getBoundingClientRect();
-    
-    // Store item rects for the source container
-    const container = containers.current.get(containerId);
-    if (container) {
-      container.items.forEach((itemId) => {
-        const itemEl = queryItem(containerId, itemId);
-        if (itemEl) {
-          itemRects.current.set(getItemKey(containerId, itemId), itemEl.getBoundingClientRect());
-        }
-      });
-    }
-
-    dragDataRef.current = { id, type, currentContainerId: containerId };
-    
-    setDragState({
-      isDragging: true,
-      draggedId: id,
-      draggedType: type,
-      sourceContainerId: containerId,
-    });
-    
-    setPortalRect(rect);
-    setPortalContent(content);
-    
-    document.addEventListener('mouseup', handleMouseUp);
-  }, [handleMouseUp, queryItem, getItemKey]);
-
-  return (
-    <DragDropContext.Provider
-      value={{
-        dragState,
-        startDrag,
-        registerContainer,
-        unregisterContainer,
-      }}
-    >
-      {children}
-      {dragState.isDragging && portalContent && portalRect && dragState.draggedType && (
-        <DragPortal 
-          initialRect={portalRect}
-          onPositionChange={handleReorder}
-          containers={containers}
-          draggedType={dragState.draggedType}
-        >
-          {portalContent}
-        </DragPortal>
-      )}
-    </DragDropContext.Provider>
   );
 }
 
