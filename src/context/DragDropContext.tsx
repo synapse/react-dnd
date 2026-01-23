@@ -145,6 +145,7 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Calculate preview index using original positions (not affected by transforms)
+  // Swap happens when dragged item passes 50% into the next item's space
   const calculatePreviewIndex = useCallback((
     containerId: string,
     centerX: number,
@@ -153,8 +154,9 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
   ): number => {
     const container = containers.current.get(containerId);
     const originalItems = originalItemsRef.current.get(containerId);
+    const dragData = dragDataRef.current;
     
-    if (!container || !originalItems || originalItems.length === 0) return 0;
+    if (!container || !originalItems || originalItems.length === 0 || !dragData) return 0;
     
     // Filter out the dragged item for position calculations
     const items = originalItems.filter(item => item.id !== draggedId);
@@ -162,16 +164,24 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
     if (items.length === 0) return 0;
     
     const direction = container.direction;
+    const isHorizontal = direction === 'horizontal';
+    
+    // Get dragged item's trailing edge (bottom for vertical, right for horizontal)
+    const draggedHalfSize = isHorizontal ? dragData.itemSize.width / 2 : dragData.itemSize.height / 2;
+    const dragTrailingEdge = isHorizontal ? centerX + draggedHalfSize : centerY + draggedHalfSize;
     
     for (let i = 0; i < items.length; i++) {
       const { rect } = items[i];
-      const itemCenterX = rect.left + rect.width / 2;
-      const itemCenterY = rect.top + rect.height / 2;
       
-      if (direction === 'horizontal') {
-        if (centerX < itemCenterX) return i;
-      } else {
-        if (centerY < itemCenterY) return i;
+      // Get this item's edges and midpoint
+      const itemStart = isHorizontal ? rect.left : rect.top;
+      const itemEnd = isHorizontal ? rect.right : rect.bottom;
+      const itemMidpoint = itemStart + (itemEnd - itemStart) / 2;
+      
+      // Swap when the trailing edge of the dragged item passes the midpoint of this item
+      // This means 50% of this item is "covered" by the dragged item
+      if (dragTrailingEdge < itemMidpoint) {
+        return i;
       }
     }
     
