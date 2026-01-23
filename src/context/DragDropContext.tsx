@@ -130,9 +130,16 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
 
   const clearAllTransforms = useCallback(() => {
     transformedElements.current.forEach(el => {
+      // First, disable transitions to prevent animation when clearing
+      el.style.transition = 'none';
       el.style.transform = '';
-      el.style.transition = '';
       el.style.opacity = '';
+      
+      // Force reflow to apply the changes immediately
+      el.offsetHeight;
+      
+      // Then clear the transition style completely
+      el.style.transition = '';
     });
     transformedElements.current.clear();
   }, []);
