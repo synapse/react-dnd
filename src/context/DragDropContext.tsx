@@ -145,7 +145,7 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Calculate preview index using original positions (not affected by transforms)
-  // Swap happens when dragged item passes 50% into the next item's space
+  // Swap happens when dragged item's trailing edge passes 50% of the target item
   const calculatePreviewIndex = useCallback((
     containerId: string,
     centerX: number,
@@ -166,20 +166,19 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
     const direction = container.direction;
     const isHorizontal = direction === 'horizontal';
     
-    // Get dragged item's trailing edge (bottom for vertical, right for horizontal)
+    // Get dragged item's trailing edge
     const draggedHalfSize = isHorizontal ? dragData.itemSize.width / 2 : dragData.itemSize.height / 2;
     const dragTrailingEdge = isHorizontal ? centerX + draggedHalfSize : centerY + draggedHalfSize;
     
     for (let i = 0; i < items.length; i++) {
       const { rect } = items[i];
       
-      // Get this item's edges and midpoint
-      const itemStart = isHorizontal ? rect.left : rect.top;
-      const itemEnd = isHorizontal ? rect.right : rect.bottom;
-      const itemMidpoint = itemStart + (itemEnd - itemStart) / 2;
+      // Get this item's midpoint
+      const itemMidpoint = isHorizontal 
+        ? rect.left + rect.width / 2 
+        : rect.top + rect.height / 2;
       
-      // Swap when the trailing edge of the dragged item passes the midpoint of this item
-      // This means 50% of this item is "covered" by the dragged item
+      // Return this index if we haven't passed the midpoint yet
       if (dragTrailingEdge < itemMidpoint) {
         return i;
       }
@@ -279,20 +278,9 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
         placeholderItem.element.style.opacity = '0';
         transformedElements.current.add(placeholderItem.element);
         
-        // Build new order for source (without dragged item)
-        const sourceNewOrder = sourceItems.filter(item => item.id !== draggedId);
-        
         // Shift items to their new positions
         sourceItems.forEach((originalItem) => {
           if (originalItem.id === draggedId) return;
-          
-          const newIndex = sourceNewOrder.findIndex(item => item.id === originalItem.id);
-          if (newIndex === -1) return;
-          
-          // The new position is where the item at newIndex originally was
-          // But we need to account for the gap left by the dragged item
-          const targetRect = sourceItems[newIndex >= draggedOriginalIndex ? newIndex : newIndex]?.rect;
-          if (!targetRect) return;
           
           // Items after the dragged item shift to fill the gap
           if (originalItem.index > draggedOriginalIndex) {
