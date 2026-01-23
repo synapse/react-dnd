@@ -1,0 +1,11 @@
+/* Draggable - Minimal styles for drag interaction feedback */
+
+.draggable {
+    cursor: grab;
+    user-select: none;
+}
+
+.draggable:active,
+.draggable--dragging {
+    cursor: grabbing;
+}
