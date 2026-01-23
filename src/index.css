@@ -330,3 +330,43 @@ body {
   background: var(--accent-soft);
   border-radius: 8px;
 }
+
+/* ===========================================
+   Demo Horizontal List
+   =========================================== */
+
+.demo-vertical-list.container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  margin-top: 32px;
+  background: var(--bg-secondary);
+  border-radius: 12px;
+}
+
+.demo-list-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 20px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.demo-list-item:hover {
+  background: var(--surface-hover);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.demo-list-item.draggable--placeholder {
+  background: var(--accent-soft);
+  border: 2px dashed var(--border-active);
+}
+
+.demo-list-item.draggable--dragging {
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  transform: scale(1.02);
+}

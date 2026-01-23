@@ -266,27 +266,27 @@ function App() {
         <Container
           id="column-order2"
           type="column2"
-          direction="horizontal"
+          direction="vertical"
           items={columnOrder}
           onReorder={handleColumnReorder}
+          className="demo-vertical-list"
         >
-          <ul>
-            {columnOrder.map((columnId) => {
-              const column = columns.find((c) => c.id === columnId);
-              if (!column) return null;
+          {columnOrder.map((columnId) => {
+            const column = columns.find((c) => c.id === columnId);
+            if (!column) return null;
 
-              return (
-                <Draggable
-                  key={columnId}
-                  id={columnId}
-                  type="column2"
-                  containerId="column-order2"
-                >
-                  <li>{column.title}</li>
-                </Draggable>
-              );
-            })}
-          </ul>
+            return (
+              <Draggable
+                key={columnId}
+                id={columnId}
+                type="column2"
+                containerId="column-order2"
+                className="demo-list-item"
+              >
+                {column.title}
+              </Draggable>
+            );
+          })}
         </Container>
       </div>
     </DragDropProvider>

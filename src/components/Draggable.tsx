@@ -16,7 +16,9 @@ export function Draggable({ id, type, containerId, children, className = '', han
   const { dragState, startDrag } = useDragDrop();
   const elementRef = useRef<HTMLDivElement>(null);
 
-  const isBeingDragged = dragState.isDragging && dragState.draggedId === id;
+  const isBeingDragged = dragState.isDragging && 
+    dragState.draggedId === id && 
+    dragState.sourceContainerId === containerId;
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if (!elementRef.current) return;
