@@ -3,9 +3,19 @@
 .draggable {
     cursor: grab;
     user-select: none;
+    /* Base transition for smooth movement when reordering */
+    transition:
+        transform 0.25s cubic-bezier(0.2, 0, 0, 1),
+        opacity 0.2s cubic-bezier(0.2, 0, 0, 1);
+    will-change: transform;
 }
 
 .draggable:active,
 .draggable--dragging {
     cursor: grabbing;
+}
+
+/* Placeholder gets a subtle shrink animation */
+.draggable--placeholder {
+    pointer-events: none;
 }

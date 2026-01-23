@@ -126,15 +126,42 @@ body {
    =========================================== */
 
 .draggable {
-  transition: opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+  transition: 
+    opacity 0.2s cubic-bezier(0.2, 0, 0, 1),
+    transform 0.2s cubic-bezier(0.2, 0, 0, 1),
+    box-shadow 0.2s cubic-bezier(0.2, 0, 0, 1);
 }
 
+/* Placeholder left behind when dragging */
 .draggable--placeholder {
-  opacity: 0.4;
+  opacity: 0.5;
+  transform: scale(0.98);
+  background: var(--accent-soft) !important;
+  border: 2px dashed var(--border-active) !important;
+  box-shadow: inset 0 0 0 1px var(--accent-soft);
 }
 
+/* The actual dragged element (in portal) */
 .draggable--dragging {
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+  box-shadow: 
+    0 20px 60px rgba(0, 0, 0, 0.5),
+    0 0 0 2px var(--accent);
+  transform: scale(1.02) rotate(1deg);
+  z-index: 10000;
+}
+
+/* Animation for items that shift position */
+.container__content {
+  /* Enable smooth layout transitions for children */
+}
+
+.container__content > .draggable {
+  transition: 
+    transform 0.25s cubic-bezier(0.2, 0, 0, 1),
+    opacity 0.2s cubic-bezier(0.2, 0, 0, 1),
+    box-shadow 0.2s ease,
+    background 0.15s ease,
+    border-color 0.15s ease;
 }
 
 /* ===========================================
@@ -194,6 +221,14 @@ body {
 /* Column Draggable Wrapper */
 .kanban__column-wrapper {
   flex-shrink: 0;
+  transition: 
+    transform 0.25s cubic-bezier(0.2, 0, 0, 1),
+    opacity 0.2s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.kanban__column-wrapper.draggable--placeholder {
+  opacity: 0.6;
+  transform: scale(0.98);
 }
 
 .kanban__column-wrapper.draggable--placeholder .kanban__column {
@@ -203,6 +238,7 @@ body {
 
 .kanban__column-wrapper.draggable--dragging {
   transform: rotate(2deg) scale(1.02);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.4);
 }
 
 /* Column */
@@ -289,7 +325,12 @@ body {
   border-radius: 10px;
   padding: 14px 16px;
   width: 100%;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  transition: 
+    transform 0.25s cubic-bezier(0.2, 0, 0, 1),
+    opacity 0.2s cubic-bezier(0.2, 0, 0, 1),
+    background 0.15s ease, 
+    border-color 0.15s ease,
+    box-shadow 0.2s ease;
 }
 
 .kanban__card:hover {
@@ -300,11 +341,15 @@ body {
 .kanban__card.draggable--placeholder {
   background: var(--accent-soft);
   border: 2px dashed var(--border-active);
+  opacity: 0.6;
+  transform: scale(0.97);
 }
 
 .kanban__card.draggable--dragging {
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
-  transform: rotate(2deg) scale(1.02);
+  box-shadow: 
+    0 24px 60px rgba(0, 0, 0, 0.5),
+    0 0 0 2px var(--accent);
+  transform: rotate(2deg) scale(1.03);
   background: var(--surface);
 }
 

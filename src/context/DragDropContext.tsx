@@ -260,6 +260,64 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
     return filteredItems.length;
   }, []);
 
+  // FLIP animation helper - captures positions before DOM change and animates after
+  const animateReorder = useCallback((containerId: string, draggedId: string) => {
+    const container = containers.current.get(containerId);
+    if (!container) return;
+
+    // Capture "First" positions before the DOM updates
+    const firstPositions = new Map<string, DOMRect>();
+    container.items.forEach((itemId) => {
+      if (itemId === draggedId) return; // Skip the dragged item
+      const el = document.querySelector(`[data-id="${itemId}"]`) as HTMLElement;
+      if (el) {
+        firstPositions.set(itemId, el.getBoundingClientRect());
+      }
+    });
+
+    // Return function to be called after state update
+    return () => {
+      requestAnimationFrame(() => {
+        container.items.forEach((itemId) => {
+          if (itemId === draggedId) return;
+          const el = document.querySelector(`[data-id="${itemId}"]`) as HTMLElement;
+          if (!el) return;
+
+          const first = firstPositions.get(itemId);
+          if (!first) return;
+
+          // "Last" position after DOM change
+          const last = el.getBoundingClientRect();
+
+          // "Invert" - calculate the difference
+          const deltaX = first.left - last.left;
+          const deltaY = first.top - last.top;
+
+          if (deltaX === 0 && deltaY === 0) return;
+
+          // Apply inverse transform immediately (no transition)
+          el.style.transition = 'none';
+          el.style.transform = `translate(${deltaX}px, ${deltaY}px)`;
+
+          // Force reflow
+          el.offsetHeight;
+
+          // "Play" - animate back to final position
+          el.style.transition = 'transform 0.25s cubic-bezier(0.2, 0, 0, 1)';
+          el.style.transform = '';
+
+          // Clean up after animation
+          const cleanup = () => {
+            el.style.transition = '';
+            el.style.transform = '';
+            el.removeEventListener('transitionend', cleanup);
+          };
+          el.addEventListener('transitionend', cleanup);
+        });
+      });
+    };
+  }, []);
+
   const handleReorder = useCallback((centerX: number, centerY: number, targetContainerId: string | null) => {
     const dragData = dragDataRef.current;
     if (!dragData || !targetContainerId) return;
@@ -288,13 +346,21 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
     if (isMovingToNewContainer) {
       lastReorderTime.current = now;
       
+      // Capture positions before move for both containers
+      const sourceContainer = containers.current.get(dragData.currentContainerId);
+      const animateSource = sourceContainer ? animateReorder(dragData.currentContainerId, dragData.id) : null;
+      const animateTarget = animateReorder(targetContainerId, dragData.id);
+      
       if (targetContainer.onItemMove) {
         targetContainer.onItemMove(dragData.id, dragData.currentContainerId, targetContainerId, insertIndex);
       }
       
       dragData.currentContainerId = targetContainerId;
       
+      // Run FLIP animations after state update
       requestAnimationFrame(() => {
+        animateSource?.();
+        animateTarget?.();
         updateItemRects(targetContainerId);
       });
       
@@ -305,16 +371,21 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
     if (currentIndex !== -1 && insertIndex !== currentIndex) {
       lastReorderTime.current = now;
       
+      // Capture positions before reorder (FLIP - First)
+      const playAnimation = animateReorder(targetContainerId, dragData.id);
+      
       const newItems = [...targetContainer.items];
       newItems.splice(currentIndex, 1);
       newItems.splice(insertIndex, 0, dragData.id);
       targetContainer.onReorder(newItems);
 
+      // Run FLIP animation after state update (Last, Invert, Play)
       requestAnimationFrame(() => {
+        playAnimation?.();
         updateItemRects(targetContainerId);
       });
     }
-  }, [findInsertionIndex, updateItemRects]);
+  }, [findInsertionIndex, updateItemRects, animateReorder]);
 
   const handleMouseUp = useCallback(() => {
     setDragState(initialDragState);
