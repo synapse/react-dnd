@@ -215,21 +215,32 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
     containers.current.delete(id);
   }, []);
 
+  // Helper to create a unique key for item rects (container + item)
+  const getItemKey = useCallback((containerId: string, itemId: string) => {
+    return `${containerId}:${itemId}`;
+  }, []);
+
+  // Helper to query an element by container ID and item ID
+  const queryItem = useCallback((containerId: string, itemId: string): HTMLElement | null => {
+    return document.querySelector(`[data-container-id="${containerId}"][data-id="${itemId}"]`);
+  }, []);
+
   const updateItemRects = useCallback((containerId: string) => {
     const container = containers.current.get(containerId);
     if (!container) return;
     
     container.items.forEach((itemId) => {
-      const itemEl = document.querySelector(`[data-id="${itemId}"]`);
+      const itemEl = queryItem(containerId, itemId);
       if (itemEl) {
-        itemRects.current.set(itemId, itemEl.getBoundingClientRect());
+        itemRects.current.set(getItemKey(containerId, itemId), itemEl.getBoundingClientRect());
       }
     });
-  }, []);
+  }, [getItemKey, queryItem]);
 
   const findInsertionIndex = useCallback((
     centerX: number,
     centerY: number,
+    containerId: string,
     items: string[],
     draggedId: string,
     direction?: DragDirection
@@ -239,7 +250,7 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
     if (filteredItems.length === 0) return 0;
     
     for (let i = 0; i < filteredItems.length; i++) {
-      const rect = itemRects.current.get(filteredItems[i]);
+      const rect = itemRects.current.get(getItemKey(containerId, filteredItems[i]));
       if (!rect) continue;
       
       const itemCenterY = rect.top + rect.height / 2;
@@ -256,7 +267,7 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
     }
     
     return filteredItems.length;
-  }, []);
+  }, [getItemKey]);
 
   // FLIP animation helper - captures positions before DOM change and animates after
   const animateReorder = useCallback((containerId: string, draggedId: string) => {
@@ -267,7 +278,7 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
     const firstPositions = new Map<string, DOMRect>();
     container.items.forEach((itemId) => {
       if (itemId === draggedId) return; // Skip the dragged item
-      const el = document.querySelector(`[data-id="${itemId}"]`) as HTMLElement;
+      const el = queryItem(containerId, itemId);
       if (el) {
         firstPositions.set(itemId, el.getBoundingClientRect());
       }
@@ -278,7 +289,7 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
       requestAnimationFrame(() => {
         container.items.forEach((itemId) => {
           if (itemId === draggedId) return;
-          const el = document.querySelector(`[data-id="${itemId}"]`) as HTMLElement;
+          const el = queryItem(containerId, itemId);
           if (!el) return;
 
           const first = firstPositions.get(itemId);
@@ -314,7 +325,7 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
         });
       });
     };
-  }, []);
+  }, [queryItem]);
 
   const handleReorder = useCallback((centerX: number, centerY: number, targetContainerId: string | null) => {
     const dragData = dragDataRef.current;
@@ -335,6 +346,7 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
     const insertIndex = findInsertionIndex(
       centerX,
       centerY,
+      targetContainerId,
       targetContainer.items,
       dragData.id,
       targetContainer.direction
@@ -412,9 +424,9 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
     const container = containers.current.get(containerId);
     if (container) {
       container.items.forEach((itemId) => {
-        const itemEl = document.querySelector(`[data-id="${itemId}"]`);
+        const itemEl = queryItem(containerId, itemId);
         if (itemEl) {
-          itemRects.current.set(itemId, itemEl.getBoundingClientRect());
+          itemRects.current.set(getItemKey(containerId, itemId), itemEl.getBoundingClientRect());
         }
       });
     }
@@ -432,7 +444,7 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
     setPortalContent(content);
     
     document.addEventListener('mouseup', handleMouseUp);
-  }, [handleMouseUp]);
+  }, [handleMouseUp, queryItem, getItemKey]);
 
   return (
     <DragDropContext.Provider

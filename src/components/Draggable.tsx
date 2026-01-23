@@ -45,6 +45,7 @@ export function Draggable({ id, type, containerId, children, className = '', han
       onMouseDown={handleMouseDown}
       data-id={id}
       data-type={type}
+      data-container-id={containerId}
     >
       {children}
     </div>
