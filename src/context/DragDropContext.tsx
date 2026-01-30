@@ -5,6 +5,7 @@ import React, {
   useCallback,
   useRef,
   useEffect,
+  useMemo,
 } from "react";
 import { createPortal } from "react-dom";
 import type { DragDirection, ReorderResult, ItemMoveResult } from "../types";
@@ -78,6 +79,7 @@ interface DragDropContextValue {
 const SCROLL_THRESHOLD = 60; // Distance from edge to trigger scroll
 const SCROLL_SPEED = 12; // Pixels per frame
 const PLACEHOLDER_CLASS = "dnd-placeholder";
+const SCROLLABLE_REGEX = /(auto|scroll)/;
 
 // ============================================================================
 // CONTEXT
@@ -105,6 +107,8 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
   const dropTargetRef = useRef<DropTarget | null>(null);
   const scrollAnimationRef = useRef<number | null>(null);
   const mousePositionRef = useRef({ x: 0, y: 0 });
+  const portalRef = useRef<HTMLDivElement | null>(null);
+  const dragDataRef = useRef<DragData | null>(null);
 
   // ============================================================================
   // PLACEHOLDER MANAGEMENT
@@ -149,17 +153,23 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
       if (!placeholderRef.current) return;
 
       const placeholder = placeholderRef.current;
+      const targetSibling = index < draggables.length ? draggables[index] : null;
 
-      // Remove from current position if needed
-      if (placeholder.parentElement) {
-        placeholder.remove();
+      // Skip if already in correct position (avoid unnecessary DOM operations)
+      if (placeholder.parentElement === container) {
+        if (targetSibling === null && placeholder.nextElementSibling === null) {
+          return; // Already at end
+        }
+        if (placeholder.nextElementSibling === targetSibling) {
+          return; // Already before target
+        }
       }
 
       // Insert at correct position
-      if (index >= draggables.length) {
-        container.appendChild(placeholder);
+      if (targetSibling) {
+        container.insertBefore(placeholder, targetSibling);
       } else {
-        container.insertBefore(placeholder, draggables[index]);
+        container.appendChild(placeholder);
       }
     },
     []
@@ -348,10 +358,10 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
       if (!(el instanceof HTMLElement)) continue;
 
       const style = window.getComputedStyle(el);
-      const isVerticallyScrollable = /(auto|scroll)/.test(
+      const isVerticallyScrollable = SCROLLABLE_REGEX.test(
         style.overflow + style.overflowY
       );
-      const isHorizontallyScrollable = /(auto|scroll)/.test(
+      const isHorizontallyScrollable = SCROLLABLE_REGEX.test(
         style.overflow + style.overflowX
       );
 
@@ -466,7 +476,8 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
         clientY: e.clientY,
       };
 
-      // Update state
+      // Update state and ref
+      dragDataRef.current = newDragData;
       setDragData(newDragData);
       setDragState({
         isDragging: true,
@@ -507,10 +518,11 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
     (e: MouseEvent) => {
       mousePositionRef.current = { x: e.clientX, y: e.clientY };
 
-      // Update drag data position for portal
-      setDragData((prev) =>
-        prev ? { ...prev, clientX: e.clientX, clientY: e.clientY } : null
-      );
+      // Update portal position directly via ref (avoids React re-render)
+      if (portalRef.current && dragDataRef.current) {
+        portalRef.current.style.left = `${e.clientX - dragDataRef.current.offsetX}px`;
+        portalRef.current.style.top = `${e.clientY - dragDataRef.current.offsetY}px`;
+      }
 
       // Update drop target and placeholder
       updateDropTarget(e.clientX, e.clientY);
@@ -565,7 +577,8 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
     stopAutoScrollLoop();
     dropTargetRef.current = null;
 
-    // Reset state
+    // Reset state and ref
+    dragDataRef.current = null;
     setDragState({
       isDragging: false,
       draggedId: null,
@@ -606,21 +619,26 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
   // RENDER
   // ============================================================================
 
-  const contextValue: DragDropContextValue = {
-    dragState,
-    startDrag,
-    registerContainer,
-    unregisterContainer,
-  };
+  // Memoize context value to prevent unnecessary re-renders of consumers
+  const contextValue = useMemo<DragDropContextValue>(
+    () => ({
+      dragState,
+      startDrag,
+      registerContainer,
+      unregisterContainer,
+    }),
+    [dragState, startDrag, registerContainer, unregisterContainer]
+  );
 
   return (
     <DragDropContext.Provider value={contextValue}>
       {children}
 
-      {/* Dragged element portal */}
+      {/* Dragged element portal - position updated via ref in handleMouseMove */}
       {dragData &&
         createPortal(
           <div
+            ref={portalRef}
             style={{
               position: "fixed",
               pointerEvents: "none",
@@ -632,7 +650,6 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
               transform: "rotate(2deg) scale(1.02)",
               boxShadow: "0 12px 40px rgba(0, 0, 0, 0.25)",
               opacity: 0.95,
-              transition: "transform 0.1s ease, box-shadow 0.1s ease",
             }}
           >
             {dragData.content}
