@@ -39,13 +39,13 @@ body {
 
 .container {
   position: relative;
-  min-width: 200px;
-  min-height: 100px;
-  background: var(--bg-secondary);
-  border: 2px solid var(--border);
-  border-radius: 16px;
-  overflow: hidden;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+  /* min-width: 200px; */
+  /* min-height: 100px; */
+  /* background: var(--bg-secondary); */
+  /* border: 2px solid var(--border); */
+  /* border-radius: 16px; */
+  /* overflow: hidden; */
+  /* box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3); */
 }
 
 .container--active {
@@ -58,10 +58,6 @@ body {
 /* ===========================================
    Default Draggable Styles
    =========================================== */
-
-.draggable {
-  /* No transitions - all animations handled by JavaScript */
-}
 
 /* Placeholder left behind when dragging */
 .draggable--placeholder {
@@ -115,10 +111,10 @@ body {
 /* Board Container - Override defaults */
 .kanban__board {
   min-height: auto !important;
-  background: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
-  overflow: visible !important;
+  /* background: transparent !important; */
+  /* border: none !important; */
+  /* box-shadow: none !important; */
+  /* overflow: visible !important; */
 }
 
 .kanban__board.container {

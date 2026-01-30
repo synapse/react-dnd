@@ -40,7 +40,7 @@ function TestContainer({ id, acceptsTypes, direction, children, onReorder, onIte
   }, [id, acceptsTypes, direction, onReorder, onItemMove, registerContainer, unregisterContainer, mockRect]);
 
   return (
-    <div ref={containerRef} data-testid={`container-${id}`}>
+    <div ref={containerRef} data-testid={`container-${id}`} data-container-id={id}>
       {children}
     </div>
   );

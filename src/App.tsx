@@ -156,7 +156,11 @@ function App() {
 
   // Handle column reorder (called once on drop)
   const handleColumnReorder = useCallback((result: ReorderResult) => {
-    setColumnOrder((prev) => reorderArray(prev, result.fromIndex, result.toIndex));
+    console.log("handleColumnReorder", result);
+
+    setColumnOrder((prev) =>
+      reorderArray(prev, result.fromIndex, result.toIndex),
+    );
   }, []);
 
   // Handle card reorder within same column (called once on drop)
@@ -164,7 +168,11 @@ function App() {
     (columnId: string, result: ReorderResult) => {
       setColumnCards((prev) => ({
         ...prev,
-        [columnId]: reorderArray(prev[columnId], result.fromIndex, result.toIndex),
+        [columnId]: reorderArray(
+          prev[columnId],
+          result.fromIndex,
+          result.toIndex,
+        ),
       }));
     },
     [],

@@ -5,6 +5,8 @@ import './Draggable.css';
 interface DraggableProps {
   /** HTML element or component to render as (default: 'div') */
   as?: ElementType;
+  /** HTML element type for the placeholder (default: 'div') */
+  placeholderAs?: keyof HTMLElementTagNameMap;
   /** Unique identifier for this draggable item */
   id: string;
   /** Type identifier - must match Container's type or acceptsTypes */
@@ -23,6 +25,7 @@ interface DraggableProps {
 
 export function Draggable({ 
   as: Component = 'div',
+  placeholderAs = 'div',
   id, 
   type, 
   containerId, 
@@ -55,7 +58,7 @@ export function Draggable({
       </Component>
     );
     
-    startDrag(id, type, containerId, e, elementRef.current, portalContent);
+    startDrag(id, type, containerId, e, elementRef.current, portalContent, placeholderAs);
   };
 
   return (

@@ -57,7 +57,8 @@ interface DragDropContextValue {
     containerId: string,
     e: React.MouseEvent,
     element: HTMLElement,
-    content: React.ReactNode
+    content: React.ReactNode,
+    placeholderTag?: keyof HTMLElementTagNameMap
   ) => void;
   registerContainer: (
     id: string,
@@ -100,7 +101,7 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
 
   // Refs
   const containersRef = useRef<Map<string, ContainerConfig>>(new Map());
-  const placeholderRef = useRef<HTMLDivElement | null>(null);
+  const placeholderRef = useRef<HTMLElement | null>(null);
   const dropTargetRef = useRef<DropTarget | null>(null);
   const scrollAnimationRef = useRef<number | null>(null);
   const mousePositionRef = useRef({ x: 0, y: 0 });
@@ -113,19 +114,22 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
    * Creates the placeholder element with styles matching the dragged element.
    * Base styles come from CSS (.dnd-placeholder), only dynamic dimensions set here.
    */
-  const createPlaceholder = useCallback((rect: DOMRect, element: HTMLElement) => {
-    const placeholder = document.createElement("div");
-    placeholder.className = PLACEHOLDER_CLASS;
-    
-    const computedStyle = window.getComputedStyle(element);
-    
-    // Only set dynamic properties - base styles are in Draggable.css
-    placeholder.style.width = `${rect.width}px`;
-    placeholder.style.height = `${rect.height}px`;
-    placeholder.style.margin = computedStyle.margin;
-    
-    return placeholder;
-  }, []);
+  const createPlaceholder = useCallback(
+    (rect: DOMRect, element: HTMLElement, tagName: keyof HTMLElementTagNameMap = "div") => {
+      const placeholder = document.createElement(tagName);
+      placeholder.className = PLACEHOLDER_CLASS;
+
+      const computedStyle = window.getComputedStyle(element);
+
+      // Only set dynamic properties - base styles are in Draggable.css
+      placeholder.style.width = `${rect.width}px`;
+      placeholder.style.height = `${rect.height}px`;
+      placeholder.style.margin = computedStyle.margin;
+
+      return placeholder;
+    },
+    []
+  );
 
   /**
    * Removes placeholder from DOM
@@ -412,7 +416,8 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
       containerId: string,
       e: React.MouseEvent,
       element: HTMLElement,
-      content: React.ReactNode
+      content: React.ReactNode,
+      placeholderTag: keyof HTMLElementTagNameMap = "div"
     ) => {
       const rect = element.getBoundingClientRect();
       const container = containersRef.current.get(containerId);
@@ -452,7 +457,7 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
       mousePositionRef.current = { x: e.clientX, y: e.clientY };
 
       // Create and position placeholder immediately (before hiding the element)
-      const placeholder = createPlaceholder(rect, element);
+      const placeholder = createPlaceholder(rect, element, placeholderTag);
       placeholderRef.current = placeholder;
 
       // Insert placeholder at current position
