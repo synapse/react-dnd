@@ -511,13 +511,10 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
     if (dropTarget && targetContainer) {
       if (dropTarget.containerId === dragData.sourceContainerId) {
         // Reorder within same container
+        // Note: dropTarget.index is already calculated on the filtered array
+        // (without the dragged item), so no adjustment is needed
         const fromIndex = dragData.sourceIndex;
-        let toIndex = dropTarget.index;
-
-        // Adjust toIndex if moving forward (account for the removed item)
-        if (toIndex > fromIndex) {
-          toIndex--;
-        }
+        const toIndex = dropTarget.index;
 
         if (fromIndex !== toIndex) {
           targetContainer.onReorder?.({
