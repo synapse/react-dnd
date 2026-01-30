@@ -69,7 +69,7 @@ interface DragDropContextValue {
     onReorder?: (result: ReorderResult) => void,
     onItemMove?: (result: ItemMoveResult) => void
   ) => void;
-  unregisterContainer: (id: string) => void;
+  unregisterContainer: (id: string, element?: HTMLElement | null) => void;
 }
 
 // ============================================================================
@@ -196,6 +196,13 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
     ) => {
       if (!element) return;
 
+      // Check if there's an existing registration with a different element still in the DOM.
+      // This prevents portal-rendered containers from overwriting the original registration.
+      const existing = containersRef.current.get(id);
+      if (existing && existing.element !== element && existing.element.isConnected) {
+        return;
+      }
+
       containersRef.current.set(id, {
         id,
         acceptsTypes,
@@ -208,8 +215,13 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
     []
   );
 
-  const unregisterContainer = useCallback((id: string) => {
-    containersRef.current.delete(id);
+  const unregisterContainer = useCallback((id: string, element?: HTMLElement | null) => {
+    // Only unregister if no element provided, or if the element matches the registered one.
+    // This prevents portal-rendered containers from unregistering the original container.
+    const registered = containersRef.current.get(id);
+    if (!element || !registered || registered.element === element) {
+      containersRef.current.delete(id);
+    }
   }, []);
 
   // ============================================================================

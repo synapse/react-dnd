@@ -54,7 +54,8 @@ export function Container({
   }, [id, acceptedTypes, direction, onReorder, onItemMove, registerContainer]);
 
   useEffect(() => {
-    return () => unregisterContainer(id);
+    const element = containerRef.current;
+    return () => unregisterContainer(id, element);
   }, [id, unregisterContainer]);
 
   const isValidDropTarget = dragState.isDragging && 
