@@ -100,10 +100,6 @@ body {
 /* Board Container - Override defaults */
 .kanban__board {
   min-height: auto !important;
-  /* background: transparent !important; */
-  /* border: none !important; */
-  /* box-shadow: none !important; */
-  /* overflow: visible !important; */
 }
 
 .kanban__board.container {
@@ -130,7 +126,7 @@ body {
 }
 
 .kanban__column-wrapper.draggable--dragging {
-  transform: rotate(2deg) scale(1.02);
+  /* transform: rotate(2deg) scale(1.02); */
   box-shadow: 0 30px 80px rgba(0, 0, 0, 0.4);
 }
 
@@ -228,7 +224,7 @@ body {
   box-shadow: 
     0 24px 60px rgba(0, 0, 0, 0.5),
     0 0 0 2px var(--accent);
-  transform: rotate(2deg) scale(1.03);
+  /* transform: rotate(2deg) scale(1.03); */
   background: var(--surface);
 }
 
