@@ -348,25 +348,47 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
       if (!(el instanceof HTMLElement)) continue;
 
       const style = window.getComputedStyle(el);
-      const isScrollable = /(auto|scroll)/.test(
-        style.overflow + style.overflowY + style.overflowX
+      const isVerticallyScrollable = /(auto|scroll)/.test(
+        style.overflow + style.overflowY
+      );
+      const isHorizontallyScrollable = /(auto|scroll)/.test(
+        style.overflow + style.overflowX
       );
 
-      if (!isScrollable) continue;
+      if (!isVerticallyScrollable && !isHorizontallyScrollable) continue;
 
       const rect = el.getBoundingClientRect();
-      const canScrollUp = el.scrollTop > 0;
-      const canScrollDown = el.scrollTop < el.scrollHeight - el.clientHeight;
 
       // Check vertical edges
-      if (y < rect.top + SCROLL_THRESHOLD && canScrollUp) {
-        // Near top edge - scroll up
-        el.scrollTop -= SCROLL_SPEED;
-        didScroll = true;
-      } else if (y > rect.bottom - SCROLL_THRESHOLD && canScrollDown) {
-        // Near bottom edge - scroll down
-        el.scrollTop += SCROLL_SPEED;
-        didScroll = true;
+      if (isVerticallyScrollable) {
+        const canScrollUp = el.scrollTop > 0;
+        const canScrollDown = el.scrollTop < el.scrollHeight - el.clientHeight;
+
+        if (y < rect.top + SCROLL_THRESHOLD && canScrollUp) {
+          // Near top edge - scroll up
+          el.scrollTop -= SCROLL_SPEED;
+          didScroll = true;
+        } else if (y > rect.bottom - SCROLL_THRESHOLD && canScrollDown) {
+          // Near bottom edge - scroll down
+          el.scrollTop += SCROLL_SPEED;
+          didScroll = true;
+        }
+      }
+
+      // Check horizontal edges
+      if (isHorizontallyScrollable) {
+        const canScrollLeft = el.scrollLeft > 0;
+        const canScrollRight = el.scrollLeft < el.scrollWidth - el.clientWidth;
+
+        if (x < rect.left + SCROLL_THRESHOLD && canScrollLeft) {
+          // Near left edge - scroll left
+          el.scrollLeft -= SCROLL_SPEED;
+          didScroll = true;
+        } else if (x > rect.right - SCROLL_THRESHOLD && canScrollRight) {
+          // Near right edge - scroll right
+          el.scrollLeft += SCROLL_SPEED;
+          didScroll = true;
+        }
       }
 
       // Only scroll one container at a time
