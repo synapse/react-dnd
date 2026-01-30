@@ -1,6 +1,26 @@
-import React, { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
-import { createPortal } from 'react-dom';
-import { DragDirection, ReorderResult, ItemMoveResult } from '../types';
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useCallback,
+  useRef,
+  useEffect,
+} from "react";
+import { createPortal } from "react-dom";
+import type { DragDirection, ReorderResult, ItemMoveResult } from "../types";
+
+// ============================================================================
+// TYPES
+// ============================================================================
+
+interface ContainerConfig {
+  id: string;
+  acceptsTypes: string[];
+  direction?: DragDirection;
+  element: HTMLElement;
+  onReorder?: (result: ReorderResult) => void;
+  onItemMove?: (result: ItemMoveResult) => void;
+}
 
 interface DragState {
   isDragging: boolean;
@@ -9,29 +29,39 @@ interface DragState {
   sourceContainerId: string | null;
 }
 
-interface ContainerData {
+interface DragData {
   id: string;
-  direction?: DragDirection;
-  acceptsTypes: string[];
-  element: HTMLElement | null;
-  onReorder?: (result: ReorderResult) => void;
-  onItemMove?: (result: ItemMoveResult) => void;
+  type: string;
+  sourceContainerId: string;
+  sourceIndex: number;
+  element: HTMLElement;
+  rect: DOMRect;
+  content: React.ReactNode;
+  offsetX: number;
+  offsetY: number;
+  clientX: number;
+  clientY: number;
+}
+
+interface DropTarget {
+  containerId: string;
+  index: number;
 }
 
 interface DragDropContextValue {
   dragState: DragState;
   startDrag: (
-    id: string, 
-    type: string, 
+    id: string,
+    type: string,
     containerId: string,
-    e: React.MouseEvent, 
-    element: HTMLElement, 
+    e: React.MouseEvent,
+    element: HTMLElement,
     content: React.ReactNode
   ) => void;
   registerContainer: (
     id: string,
     acceptsTypes: string[],
-    direction: DragDirection | undefined, 
+    direction: DragDirection | undefined,
     element: HTMLElement | null,
     onReorder?: (result: ReorderResult) => void,
     onItemMove?: (result: ItemMoveResult) => void
@@ -39,588 +69,571 @@ interface DragDropContextValue {
   unregisterContainer: (id: string) => void;
 }
 
-const initialDragState: DragState = {
-  isDragging: false,
-  draggedId: null,
-  draggedType: null,
-  sourceContainerId: null,
-};
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+
+const SCROLL_THRESHOLD = 60; // Distance from edge to trigger scroll
+const SCROLL_SPEED = 12; // Pixels per frame
+const PLACEHOLDER_CLASS = "dnd-placeholder";
+
+// ============================================================================
+// CONTEXT
+// ============================================================================
 
 const DragDropContext = createContext<DragDropContextValue | null>(null);
 
-const SCROLL_THRESHOLD = 60;
-const SCROLL_SPEED = 15;
-
-// Store original item data at drag start
-interface OriginalItemData {
-  id: string;
-  index: number;
-  rect: DOMRect;
-  element: HTMLElement;
-}
+// ============================================================================
+// PROVIDER
+// ============================================================================
 
 export function DragDropProvider({ children }: { children: React.ReactNode }) {
-  const [dragState, setDragState] = useState<DragState>(initialDragState);
-  const [portalContent, setPortalContent] = useState<React.ReactNode | null>(null);
-  const [portalRect, setPortalRect] = useState<DOMRect | null>(null);
-  
-  const containers = useRef<Map<string, ContainerData>>(new Map());
-  
-  // Drag session data
-  const dragDataRef = useRef<{ 
-    id: string; 
-    type: string; 
-    sourceContainerId: string;
-    sourceIndex: number;
-    itemSize: { width: number; height: number };
-  } | null>(null);
-  
-  // Original positions captured at drag start (before any transforms)
-  const originalItemsRef = useRef<Map<string, OriginalItemData[]>>(new Map());
-  
-  // Track current preview state
-  const previewStateRef = useRef<{ containerId: string | null; index: number }>({ 
-    containerId: null, 
-    index: -1 
+  // State
+  const [dragState, setDragState] = useState<DragState>({
+    isDragging: false,
+    draggedId: null,
+    draggedType: null,
+    sourceContainerId: null,
   });
-  
-  // Track transformed elements for cleanup
-  const transformedElements = useRef<Set<HTMLElement>>(new Set());
+  const [dragData, setDragData] = useState<DragData | null>(null);
+
+  // Refs
+  const containersRef = useRef<Map<string, ContainerConfig>>(new Map());
+  const placeholderRef = useRef<HTMLDivElement | null>(null);
+  const dropTargetRef = useRef<DropTarget | null>(null);
+  const scrollAnimationRef = useRef<number | null>(null);
+  const mousePositionRef = useRef({ x: 0, y: 0 });
+
+  // ============================================================================
+  // PLACEHOLDER MANAGEMENT
+  // ============================================================================
+
+  /**
+   * Creates the placeholder element with styles matching the dragged element
+   */
+  const createPlaceholder = useCallback((rect: DOMRect, element: HTMLElement) => {
+    const placeholder = document.createElement("div");
+    placeholder.className = PLACEHOLDER_CLASS;
+    
+    const computedStyle = window.getComputedStyle(element);
+    
+    placeholder.style.cssText = `
+      width: ${rect.width}px;
+      height: ${rect.height}px;
+      margin: ${computedStyle.margin};
+      background-color: rgba(0, 0, 0, 0.05);
+      border: 2px dashed rgba(0, 0, 0, 0.15);
+      border-radius: ${computedStyle.borderRadius || "6px"};
+      box-sizing: border-box;
+      pointer-events: none;
+      flex-shrink: 0;
+    `;
+    
+    return placeholder;
+  }, []);
+
+  /**
+   * Removes placeholder from DOM
+   */
+  const removePlaceholder = useCallback(() => {
+    if (placeholderRef.current) {
+      placeholderRef.current.remove();
+      placeholderRef.current = null;
+    }
+  }, []);
+
+  /**
+   * Inserts placeholder at specified position in container
+   */
+  const insertPlaceholder = useCallback(
+    (container: HTMLElement, index: number, draggables: HTMLElement[]) => {
+      if (!placeholderRef.current) return;
+
+      const placeholder = placeholderRef.current;
+
+      // Remove from current position if needed
+      if (placeholder.parentElement) {
+        placeholder.remove();
+      }
+
+      // Insert at correct position
+      if (index >= draggables.length) {
+        container.appendChild(placeholder);
+      } else {
+        container.insertBefore(placeholder, draggables[index]);
+      }
+    },
+    []
+  );
+
+  // ============================================================================
+  // CONTAINER REGISTRATION
+  // ============================================================================
 
   const registerContainer = useCallback(
     (
       id: string,
       acceptsTypes: string[],
-      direction: DragDirection | undefined, 
+      direction: DragDirection | undefined,
       element: HTMLElement | null,
       onReorder?: (result: ReorderResult) => void,
       onItemMove?: (result: ItemMoveResult) => void
     ) => {
-      containers.current.set(id, { id, acceptsTypes, direction, element, onReorder, onItemMove });
+      if (!element) return;
+
+      containersRef.current.set(id, {
+        id,
+        acceptsTypes,
+        direction,
+        element,
+        onReorder,
+        onItemMove,
+      });
     },
     []
   );
 
   const unregisterContainer = useCallback((id: string) => {
-    containers.current.delete(id);
+    containersRef.current.delete(id);
   }, []);
 
-  // Capture positions for a single container
-  const captureContainerPositions = useCallback((containerId: string): OriginalItemData[] => {
-    const container = containers.current.get(containerId);
-    if (!container?.element) return [];
-    
-    const draggables = Array.from(
-      container.element.querySelectorAll(`[data-container-id="${containerId}"]`)
-    ) as HTMLElement[];
-    
-    return draggables.map((el, index) => ({
-      id: el.getAttribute('data-id')!,
-      index,
-      rect: el.getBoundingClientRect(),
-      element: el,
-    }));
-  }, []);
+  // ============================================================================
+  // DROP TARGET CALCULATION
+  // ============================================================================
 
-  // Capture original positions of all items in relevant containers
-  const captureOriginalPositions = useCallback((draggedType: string) => {
-    originalItemsRef.current.clear();
-    
-    for (const [containerId, container] of containers.current.entries()) {
-      if (!container.element || !container.acceptsTypes.includes(draggedType)) continue;
-      
-      const items = captureContainerPositions(containerId);
-      originalItemsRef.current.set(containerId, items);
-    }
-  }, [captureContainerPositions]);
+  /**
+   * Finds the container under the cursor that accepts the dragged type
+   */
+  const findTargetContainer = useCallback(
+    (clientX: number, clientY: number, draggedType: string): ContainerConfig | null => {
+      const elementsUnderCursor = document.elementsFromPoint(clientX, clientY);
 
-  // Get items for a container, capturing on-demand if not already captured
-  const getContainerItems = useCallback((containerId: string): OriginalItemData[] => {
-    let items = originalItemsRef.current.get(containerId);
-    
-    // If not captured yet (container might have been empty or registered late), capture now
-    if (items === undefined) {
-      items = captureContainerPositions(containerId);
-      originalItemsRef.current.set(containerId, items);
-    }
-    
-    return items;
-  }, [captureContainerPositions]);
-
-  const clearAllTransforms = useCallback(() => {
-    transformedElements.current.forEach(el => {
-      // Disable transitions to prevent animation when clearing
-      el.style.transition = 'none';
-      el.style.transform = '';
-      el.style.opacity = '';
-      
-      // Force reflow to apply the changes immediately
-      el.offsetHeight;
-      
-      // Clear the transition style completely
-      el.style.transition = '';
-    });
-    transformedElements.current.clear();
-  }, []);
-
-  // Calculate preview index - where the item would be inserted
-  // Uses 50% threshold: swap when dragged item's trailing edge passes target's midpoint
-  const calculatePreviewIndex = useCallback((
-    containerId: string,
-    centerX: number,
-    centerY: number,
-    draggedId: string
-  ): number => {
-    const container = containers.current.get(containerId);
-    const dragData = dragDataRef.current;
-    
-    if (!container || !dragData) return 0;
-    
-    const originalItems = getContainerItems(containerId);
-    
-    // Filter out the dragged item for position calculations
-    const items = originalItems.filter(item => item.id !== draggedId);
-    
-    // Empty container - drop at index 0
-    if (items.length === 0) return 0;
-    
-    const isHorizontal = container.direction === 'horizontal';
-    
-    // Get dragged item's trailing edge (right for horizontal, bottom for vertical)
-    const draggedHalfSize = isHorizontal ? dragData.itemSize.width / 2 : dragData.itemSize.height / 2;
-    const dragTrailingEdge = isHorizontal ? centerX + draggedHalfSize : centerY + draggedHalfSize;
-    
-    for (let i = 0; i < items.length; i++) {
-      const { rect } = items[i];
-      
-      // Get this item's midpoint
-      const itemMidpoint = isHorizontal 
-        ? rect.left + rect.width / 2 
-        : rect.top + rect.height / 2;
-      
-      // Return this index if we haven't passed the midpoint yet
-      if (dragTrailingEdge < itemMidpoint) {
-        return i;
-      }
-    }
-    
-    // Passed all items - insert at end
-    return items.length;
-  }, [getContainerItems]);
-
-  // Apply transforms to show visual preview of the reorder
-  const applyTransforms = useCallback((
-    targetContainerId: string | null,
-    previewIndex: number,
-    draggedId: string,
-    sourceContainerId: string
-  ) => {
-    // Skip if nothing changed
-    if (
-      previewStateRef.current.containerId === targetContainerId &&
-      previewStateRef.current.index === previewIndex
-    ) {
-      return;
-    }
-    
-    previewStateRef.current = { containerId: targetContainerId, index: previewIndex };
-    
-    // Clear all transforms first
-    clearAllTransforms();
-    
-    if (!targetContainerId) return;
-    
-    const dragData = dragDataRef.current;
-    if (!dragData) return;
-    
-    const container = containers.current.get(targetContainerId);
-    if (!container) return;
-    
-    const targetItems = getContainerItems(targetContainerId);
-    const sourceItems = getContainerItems(sourceContainerId);
-    
-    const isSameContainer = targetContainerId === sourceContainerId;
-    const isHorizontal = container.direction === 'horizontal';
-    
-    // Find the placeholder element (the dragged item's original element)
-    const placeholderItem = sourceItems.find(item => item.id === draggedId);
-    
-    if (isSameContainer) {
-      // === SAME CONTAINER REORDER ===
-      const draggedOriginalIndex = targetItems.findIndex(item => item.id === draggedId);
-      
-      if (draggedOriginalIndex === -1 || !placeholderItem) return;
-      if (previewIndex === draggedOriginalIndex) return; // No change needed
-      
-      // Build the new order (what positions would look like after reorder)
-      const newOrder = targetItems
-        .filter(item => item.id !== draggedId)
-        .map(item => ({ ...item }));
-      
-      // Insert placeholder at preview position
-      newOrder.splice(previewIndex, 0, { ...placeholderItem, id: draggedId });
-      
-      // Calculate transforms: each item moves from original position to new position
-      targetItems.forEach((originalItem) => {
-        const newIndex = newOrder.findIndex(item => item.id === originalItem.id);
-        if (newIndex === -1) return;
-        
-        const targetPosition = targetItems[newIndex];
-        if (!targetPosition) return;
-        
-        // Calculate pixel difference between original and target positions
-        const deltaX = targetPosition.rect.left - originalItem.rect.left;
-        const deltaY = targetPosition.rect.top - originalItem.rect.top;
-        
-        // Apply transform if there's movement
-        if (deltaX !== 0 || deltaY !== 0) {
-          const transform = isHorizontal
-            ? `translateX(${deltaX}px)`
-            : `translateY(${deltaY}px)`;
-          
-          originalItem.element.style.transition = 'transform 0.2s cubic-bezier(0.2, 0, 0, 1)';
-          originalItem.element.style.transform = transform;
-          transformedElements.current.add(originalItem.element);
-        }
-      });
-    } else {
-      // === CROSS-CONTAINER MOVE ===
-      const sourceContainer = containers.current.get(sourceContainerId);
-      const isSourceHorizontal = sourceContainer?.direction === 'horizontal';
-      
-      // 1. In source container: collapse items to fill the gap
-      if (placeholderItem) {
-        const draggedOriginalIndex = sourceItems.findIndex(item => item.id === draggedId);
-        
-        // Hide the placeholder (the original element being dragged)
-        placeholderItem.element.style.transition = 'opacity 0.2s ease';
-        placeholderItem.element.style.opacity = '0';
-        transformedElements.current.add(placeholderItem.element);
-        
-        // Shift items after the dragged item to fill the gap
-        sourceItems.forEach((originalItem) => {
-          if (originalItem.id === draggedId) return;
-          
-          if (originalItem.index > draggedOriginalIndex) {
-            const prevItem = sourceItems[originalItem.index - 1];
-            if (prevItem) {
-              const deltaX = prevItem.rect.left - originalItem.rect.left;
-              const deltaY = prevItem.rect.top - originalItem.rect.top;
-              
-              if (deltaX !== 0 || deltaY !== 0) {
-                const transform = isSourceHorizontal
-                  ? `translateX(${deltaX}px)`
-                  : `translateY(${deltaY}px)`;
-                
-                originalItem.element.style.transition = 'transform 0.2s cubic-bezier(0.2, 0, 0, 1)';
-                originalItem.element.style.transform = transform;
-                transformedElements.current.add(originalItem.element);
-              }
+      for (const el of elementsUnderCursor) {
+        const containerEl = (el as HTMLElement).closest("[data-container-id]");
+        if (containerEl) {
+          const containerId = containerEl.getAttribute("data-container-id");
+          if (containerId) {
+            const config = containersRef.current.get(containerId);
+            if (config && config.acceptsTypes.includes(draggedType)) {
+              return config;
             }
           }
-        });
-      }
-      
-      // 2. In target container: shift items to make room for the incoming item
-      if (targetItems.length > 0) {
-        // Calculate space needed (dragged item size + gap)
-        const draggedSize = isHorizontal ? dragData.itemSize.width : dragData.itemSize.height;
-        
-        // Estimate gap from target container
-        let gap = 0;
-        if (targetItems.length >= 2) {
-          gap = isHorizontal
-            ? targetItems[1].rect.left - targetItems[0].rect.right
-            : targetItems[1].rect.top - targetItems[0].rect.bottom;
         }
-        const shiftAmount = draggedSize + Math.max(0, gap);
-        
-        // Shift items at and after preview index
-        targetItems.forEach((item, idx) => {
-          if (idx >= previewIndex) {
-            const transform = isHorizontal
-              ? `translateX(${shiftAmount}px)`
-              : `translateY(${shiftAmount}px)`;
-            
-            item.element.style.transition = 'transform 0.2s cubic-bezier(0.2, 0, 0, 1)';
-            item.element.style.transform = transform;
-            transformedElements.current.add(item.element);
-          }
-        });
       }
-      // For empty target containers, no transforms needed - just drop at index 0
+
+      return null;
+    },
+    []
+  );
+
+  /**
+   * Gets all draggable children of a container (excluding the placeholder and dragged element)
+   */
+  const getDraggableChildren = useCallback(
+    (container: HTMLElement, draggedId: string | null): HTMLElement[] => {
+      return Array.from(
+        container.querySelectorAll(`:scope > [data-id]:not(.${PLACEHOLDER_CLASS})`)
+      ).filter((el) => {
+        const id = el.getAttribute("data-id");
+        return id !== draggedId;
+      }) as HTMLElement[];
+    },
+    []
+  );
+
+  /**
+   * Calculates the drop index based on cursor position and 50% threshold
+   */
+  const calculateDropIndex = useCallback(
+    (
+      clientX: number,
+      clientY: number,
+      container: ContainerConfig,
+      draggables: HTMLElement[]
+    ): number => {
+      const isHorizontal = container.direction === "horizontal";
+
+      for (let i = 0; i < draggables.length; i++) {
+        const rect = draggables[i].getBoundingClientRect();
+
+        if (isHorizontal) {
+          // For horizontal: use X position and check 50% threshold
+          const midpoint = rect.left + rect.width / 2;
+          if (clientX < midpoint) {
+            return i;
+          }
+        } else {
+          // For vertical: use Y position and check 50% threshold
+          const midpoint = rect.top + rect.height / 2;
+          if (clientY < midpoint) {
+            return i;
+          }
+        }
+      }
+
+      // If we're past all elements, drop at the end
+      return draggables.length;
+    },
+    []
+  );
+
+  /**
+   * Updates the drop target and placeholder position
+   */
+  const updateDropTarget = useCallback(
+    (clientX: number, clientY: number) => {
+      if (!dragData) return;
+
+      const targetContainer = findTargetContainer(clientX, clientY, dragData.type);
+
+      if (!targetContainer) {
+        // No valid container under cursor - remove placeholder
+        removePlaceholder();
+        dropTargetRef.current = null;
+        return;
+      }
+
+      // Get draggable children (excluding the dragged element)
+      const draggables = getDraggableChildren(targetContainer.element, dragData.id);
+
+      // Calculate drop index based on 50% threshold
+      const dropIndex = calculateDropIndex(clientX, clientY, targetContainer, draggables);
+
+      // Check if target changed
+      const currentTarget = dropTargetRef.current;
+      const targetChanged =
+        !currentTarget ||
+        currentTarget.containerId !== targetContainer.id ||
+        currentTarget.index !== dropIndex;
+
+      if (targetChanged) {
+        // Update drop target
+        dropTargetRef.current = {
+          containerId: targetContainer.id,
+          index: dropIndex,
+        };
+
+        // Create placeholder if it doesn't exist
+        if (!placeholderRef.current) {
+          placeholderRef.current = createPlaceholder(dragData.rect, dragData.element);
+        }
+
+        // Insert placeholder at new position
+        insertPlaceholder(targetContainer.element, dropIndex, draggables);
+      }
+    },
+    [
+      dragData,
+      findTargetContainer,
+      getDraggableChildren,
+      calculateDropIndex,
+      removePlaceholder,
+      createPlaceholder,
+      insertPlaceholder,
+    ]
+  );
+
+  // ============================================================================
+  // AUTO-SCROLL
+  // ============================================================================
+
+  /**
+   * Finds scrollable containers under the cursor and scrolls them
+   */
+  const performAutoScroll = useCallback(() => {
+    const { x, y } = mousePositionRef.current;
+    const elementsUnderCursor = document.elementsFromPoint(x, y);
+    let didScroll = false;
+
+    for (const el of elementsUnderCursor) {
+      if (!(el instanceof HTMLElement)) continue;
+
+      const style = window.getComputedStyle(el);
+      const isScrollable = /(auto|scroll)/.test(
+        style.overflow + style.overflowY + style.overflowX
+      );
+
+      if (!isScrollable) continue;
+
+      const rect = el.getBoundingClientRect();
+      const canScrollUp = el.scrollTop > 0;
+      const canScrollDown = el.scrollTop < el.scrollHeight - el.clientHeight;
+
+      // Check vertical edges
+      if (y < rect.top + SCROLL_THRESHOLD && canScrollUp) {
+        // Near top edge - scroll up
+        el.scrollTop -= SCROLL_SPEED;
+        didScroll = true;
+      } else if (y > rect.bottom - SCROLL_THRESHOLD && canScrollDown) {
+        // Near bottom edge - scroll down
+        el.scrollTop += SCROLL_SPEED;
+        didScroll = true;
+      }
+
+      // Only scroll one container at a time
+      if (didScroll) break;
     }
-  }, [clearAllTransforms, getContainerItems]);
 
-  const handleDrop = useCallback((targetContainerId: string | null, previewIndex: number) => {
-    const dragData = dragDataRef.current;
-    
-    if (dragData && targetContainerId) {
-      const sourceContainer = containers.current.get(dragData.sourceContainerId);
-      const targetContainer = containers.current.get(targetContainerId);
+    // Update placeholder position after scroll
+    if (didScroll) {
+      updateDropTarget(x, y);
+    }
 
-      if (targetContainerId === dragData.sourceContainerId) {
-        // Same container reorder
-        if (previewIndex !== dragData.sourceIndex && sourceContainer?.onReorder) {
-          sourceContainer.onReorder({
+    return didScroll;
+  }, [updateDropTarget]);
+
+  /**
+   * Auto-scroll animation loop
+   */
+  const startAutoScrollLoop = useCallback(() => {
+    const loop = () => {
+      if (!dragState.isDragging) return;
+
+      performAutoScroll();
+      scrollAnimationRef.current = requestAnimationFrame(loop);
+    };
+
+    scrollAnimationRef.current = requestAnimationFrame(loop);
+  }, [dragState.isDragging, performAutoScroll]);
+
+  const stopAutoScrollLoop = useCallback(() => {
+    if (scrollAnimationRef.current) {
+      cancelAnimationFrame(scrollAnimationRef.current);
+      scrollAnimationRef.current = null;
+    }
+  }, []);
+
+  // ============================================================================
+  // DRAG LIFECYCLE
+  // ============================================================================
+
+  /**
+   * Starts the drag operation
+   */
+  const startDrag = useCallback(
+    (
+      id: string,
+      type: string,
+      containerId: string,
+      e: React.MouseEvent,
+      element: HTMLElement,
+      content: React.ReactNode
+    ) => {
+      const rect = element.getBoundingClientRect();
+      const container = containersRef.current.get(containerId);
+
+      // Calculate source index
+      let sourceIndex = 0;
+      if (container) {
+        const siblings = getDraggableChildren(container.element, null);
+        sourceIndex = siblings.findIndex((el) => el.getAttribute("data-id") === id);
+      }
+
+      // Create drag data
+      const newDragData: DragData = {
+        id,
+        type,
+        sourceContainerId: containerId,
+        sourceIndex,
+        element,
+        rect,
+        content,
+        offsetX: e.clientX - rect.left,
+        offsetY: e.clientY - rect.top,
+        clientX: e.clientX,
+        clientY: e.clientY,
+      };
+
+      // Update state
+      setDragData(newDragData);
+      setDragState({
+        isDragging: true,
+        draggedId: id,
+        draggedType: type,
+        sourceContainerId: containerId,
+      });
+
+      // Hide original element
+      element.style.opacity = "0";
+      element.style.pointerEvents = "none";
+
+      // Initialize mouse position
+      mousePositionRef.current = { x: e.clientX, y: e.clientY };
+
+      // Create and position placeholder immediately
+      const placeholder = createPlaceholder(rect, element);
+      placeholderRef.current = placeholder;
+
+      // Insert placeholder at current position
+      if (container) {
+        const draggables = getDraggableChildren(container.element, id);
+        insertPlaceholder(container.element, sourceIndex, draggables);
+      }
+
+      // Set initial drop target
+      dropTargetRef.current = {
+        containerId,
+        index: sourceIndex,
+      };
+    },
+    [getDraggableChildren, createPlaceholder, insertPlaceholder]
+  );
+
+  /**
+   * Handles mouse move during drag
+   */
+  const handleMouseMove = useCallback(
+    (e: MouseEvent) => {
+      mousePositionRef.current = { x: e.clientX, y: e.clientY };
+
+      // Update drag data position for portal
+      setDragData((prev) =>
+        prev ? { ...prev, clientX: e.clientX, clientY: e.clientY } : null
+      );
+
+      // Update drop target and placeholder
+      updateDropTarget(e.clientX, e.clientY);
+    },
+    [updateDropTarget]
+  );
+
+  /**
+   * Handles mouse up - finishes the drag operation
+   */
+  const handleMouseUp = useCallback(() => {
+    if (!dragData) return;
+
+    const dropTarget = dropTargetRef.current;
+    const targetContainer = dropTarget
+      ? containersRef.current.get(dropTarget.containerId)
+      : null;
+
+    // Calculate final indices and trigger callbacks
+    if (dropTarget && targetContainer) {
+      if (dropTarget.containerId === dragData.sourceContainerId) {
+        // Reorder within same container
+        const fromIndex = dragData.sourceIndex;
+        let toIndex = dropTarget.index;
+
+        // Adjust toIndex if moving forward (account for the removed item)
+        if (toIndex > fromIndex) {
+          toIndex--;
+        }
+
+        if (fromIndex !== toIndex) {
+          targetContainer.onReorder?.({
             itemId: dragData.id,
-            fromIndex: dragData.sourceIndex,
-            toIndex: previewIndex,
+            fromIndex,
+            toIndex,
           });
         }
       } else {
-        // Cross-container move
-        if (targetContainer?.onItemMove) {
-          targetContainer.onItemMove({
-            itemId: dragData.id,
-            fromContainerId: dragData.sourceContainerId,
-            toContainerId: targetContainerId,
-            fromIndex: dragData.sourceIndex,
-            toIndex: previewIndex,
-          });
-        }
+        // Move to different container
+        targetContainer.onItemMove?.({
+          itemId: dragData.id,
+          fromContainerId: dragData.sourceContainerId,
+          toContainerId: dropTarget.containerId,
+          fromIndex: dragData.sourceIndex,
+          toIndex: dropTarget.index,
+        });
       }
     }
 
-    // Clean up
-    clearAllTransforms();
-    setDragState(initialDragState);
-    setPortalContent(null);
-    setPortalRect(null);
-    dragDataRef.current = null;
-    originalItemsRef.current.clear();
-    previewStateRef.current = { containerId: null, index: -1 };
-  }, [clearAllTransforms]);
+    // Restore original element
+    dragData.element.style.opacity = "";
+    dragData.element.style.pointerEvents = "";
 
-  const startDrag = useCallback((
-    id: string, 
-    type: string,
-    containerId: string,
-    e: React.MouseEvent, 
-    element: HTMLElement,
-    content: React.ReactNode
-  ) => {
-    e.preventDefault();
-    e.stopPropagation();
-    
-    const rect = element.getBoundingClientRect();
-    
-    // Capture original positions BEFORE setting drag state
-    captureOriginalPositions(type);
-    
-    // Find source index from captured positions
-    const sourceItems = originalItemsRef.current.get(containerId);
-    const sourceIndex = sourceItems?.findIndex(item => item.id === id) ?? 0;
+    // Cleanup
+    removePlaceholder();
+    stopAutoScrollLoop();
+    dropTargetRef.current = null;
 
-    dragDataRef.current = { 
-      id, 
-      type, 
-      sourceContainerId: containerId, 
-      sourceIndex,
-      itemSize: { width: rect.width, height: rect.height }
-    };
-    
-    previewStateRef.current = { containerId, index: sourceIndex };
-    
+    // Reset state
     setDragState({
-      isDragging: true,
-      draggedId: id,
-      draggedType: type,
-      sourceContainerId: containerId,
+      isDragging: false,
+      draggedId: null,
+      draggedType: null,
+      sourceContainerId: null,
     });
-    
-    setPortalRect(rect);
-    setPortalContent(content);
-  }, [captureOriginalPositions]);
+    setDragData(null);
+  }, [dragData, removePlaceholder, stopAutoScrollLoop]);
+
+  // ============================================================================
+  // EFFECT: Event Listeners
+  // ============================================================================
+
+  useEffect(() => {
+    if (!dragState.isDragging) return;
+
+    // Add event listeners
+    window.addEventListener("mousemove", handleMouseMove, { passive: true });
+    window.addEventListener("mouseup", handleMouseUp);
+
+    // Start auto-scroll loop
+    startAutoScrollLoop();
+
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+      stopAutoScrollLoop();
+    };
+  }, [
+    dragState.isDragging,
+    handleMouseMove,
+    handleMouseUp,
+    startAutoScrollLoop,
+    stopAutoScrollLoop,
+  ]);
+
+  // ============================================================================
+  // RENDER
+  // ============================================================================
+
+  const contextValue: DragDropContextValue = {
+    dragState,
+    startDrag,
+    registerContainer,
+    unregisterContainer,
+  };
 
   return (
-    <DragDropContext.Provider
-      value={{
-        dragState,
-        startDrag,
-        registerContainer,
-        unregisterContainer,
-      }}
-    >
+    <DragDropContext.Provider value={contextValue}>
       {children}
-      {dragState.isDragging && portalContent && portalRect && dragState.draggedType && dragState.draggedId && dragState.sourceContainerId && (
-        <DragPortal 
-          initialRect={portalRect}
-          containers={containers}
-          draggedId={dragState.draggedId}
-          draggedType={dragState.draggedType}
-          sourceContainerId={dragState.sourceContainerId}
-          calculatePreviewIndex={calculatePreviewIndex}
-          applyTransforms={applyTransforms}
-          onDrop={handleDrop}
-        >
-          {portalContent}
-        </DragPortal>
-      )}
+
+      {/* Dragged element portal */}
+      {dragData &&
+        createPortal(
+          <div
+            style={{
+              position: "fixed",
+              pointerEvents: "none",
+              zIndex: 10000,
+              left: dragData.clientX - dragData.offsetX,
+              top: dragData.clientY - dragData.offsetY,
+              width: dragData.rect.width,
+              height: dragData.rect.height,
+              transform: "rotate(2deg) scale(1.02)",
+              boxShadow: "0 12px 40px rgba(0, 0, 0, 0.25)",
+              opacity: 0.95,
+              transition: "transform 0.1s ease, box-shadow 0.1s ease",
+            }}
+          >
+            {dragData.content}
+          </div>,
+          document.body
+        )}
     </DragDropContext.Provider>
   );
 }
 
-// Separate portal component to handle mouse tracking
-function DragPortal({ 
-  children, 
-  initialRect,
-  containers,
-  draggedId,
-  draggedType,
-  sourceContainerId,
-  calculatePreviewIndex,
-  applyTransforms,
-  onDrop,
-}: { 
-  children: React.ReactNode;
-  initialRect: DOMRect;
-  containers: React.MutableRefObject<Map<string, ContainerData>>;
-  draggedId: string;
-  draggedType: string;
-  sourceContainerId: string;
-  calculatePreviewIndex: (containerId: string, centerX: number, centerY: number, draggedId: string) => number;
-  applyTransforms: (targetContainerId: string | null, previewIndex: number, draggedId: string, sourceContainerId: string) => void;
-  onDrop: (targetContainerId: string | null, previewIndex: number) => void;
-}) {
-  const startMouseRef = useRef<{ x: number; y: number } | null>(null);
-  const [position, setPosition] = useState({ x: initialRect.left, y: initialRect.top });
-  const scrollIntervalRef = useRef<number | null>(null);
-  const currentTargetRef = useRef<{ containerId: string | null; previewIndex: number }>({ 
-    containerId: sourceContainerId, 
-    previewIndex: -1 
-  });
+// ============================================================================
+// HOOK
+// ============================================================================
 
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!startMouseRef.current) {
-        startMouseRef.current = { x: e.clientX, y: e.clientY };
-      }
-
-      const deltaX = e.clientX - startMouseRef.current.x;
-      const deltaY = e.clientY - startMouseRef.current.y;
-
-      const newX = initialRect.left + deltaX;
-      const newY = initialRect.top + deltaY;
-
-      setPosition({ x: newX, y: newY });
-
-      const centerX = newX + initialRect.width / 2;
-      const centerY = newY + initialRect.height / 2;
-      
-      let targetContainerId: string | null = null;
-      let smallestArea = Infinity;
-      
-      // Clear any existing scroll interval
-      if (scrollIntervalRef.current) {
-        clearInterval(scrollIntervalRef.current);
-        scrollIntervalRef.current = null;
-      }
-      
-      // Find the smallest (most specific) container that accepts this type
-      for (const [id, container] of containers.current.entries()) {
-        if (!container.element || !container.acceptsTypes.includes(draggedType)) continue;
-        
-        const rect = container.element.getBoundingClientRect();
-        const area = rect.width * rect.height;
-        
-        // Check if mouse is inside this container
-        if (
-          e.clientX >= rect.left &&
-          e.clientX <= rect.right &&
-          e.clientY >= rect.top &&
-          e.clientY <= rect.bottom &&
-          area < smallestArea
-        ) {
-          smallestArea = area;
-          targetContainerId = id;
-          
-          // Auto-scroll for scrollable containers
-          const scrollEl = container.element;
-          const canScrollVertically = scrollEl.scrollHeight > scrollEl.clientHeight;
-          const canScrollHorizontally = scrollEl.scrollWidth > scrollEl.clientWidth;
-          
-          // Vertical auto-scroll
-          if (canScrollVertically && (container.direction === 'vertical' || !container.direction)) {
-            if (e.clientY < rect.top + SCROLL_THRESHOLD && scrollEl.scrollTop > 0) {
-              scrollIntervalRef.current = window.setInterval(() => {
-                scrollEl.scrollTop -= SCROLL_SPEED;
-              }, 16);
-            } else if (e.clientY > rect.bottom - SCROLL_THRESHOLD && 
-                       scrollEl.scrollTop < scrollEl.scrollHeight - scrollEl.clientHeight) {
-              scrollIntervalRef.current = window.setInterval(() => {
-                scrollEl.scrollTop += SCROLL_SPEED;
-              }, 16);
-            }
-          }
-          
-          // Horizontal auto-scroll
-          if (canScrollHorizontally && container.direction === 'horizontal') {
-            if (e.clientX < rect.left + SCROLL_THRESHOLD && scrollEl.scrollLeft > 0) {
-              scrollIntervalRef.current = window.setInterval(() => {
-                scrollEl.scrollLeft -= SCROLL_SPEED;
-              }, 16);
-            } else if (e.clientX > rect.right - SCROLL_THRESHOLD && 
-                       scrollEl.scrollLeft < scrollEl.scrollWidth - scrollEl.clientWidth) {
-              scrollIntervalRef.current = window.setInterval(() => {
-                scrollEl.scrollLeft += SCROLL_SPEED;
-              }, 16);
-            }
-          }
-        }
-      }
-      
-      // Calculate preview index if we have a target container
-      let previewIndex = 0;
-      if (targetContainerId) {
-        previewIndex = calculatePreviewIndex(targetContainerId, centerX, centerY, draggedId);
-      }
-      
-      currentTargetRef.current = { containerId: targetContainerId, previewIndex };
-      applyTransforms(targetContainerId, previewIndex, draggedId, sourceContainerId);
-    };
-
-    const handleMouseUp = () => {
-      if (scrollIntervalRef.current) {
-        clearInterval(scrollIntervalRef.current);
-      }
-      onDrop(currentTargetRef.current.containerId, currentTargetRef.current.previewIndex);
-    };
-
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-    
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-      if (scrollIntervalRef.current) {
-        clearInterval(scrollIntervalRef.current);
-      }
-    };
-  }, [initialRect, containers, draggedType, draggedId, sourceContainerId, calculatePreviewIndex, applyTransforms, onDrop]);
-
-  return createPortal(
-    <div
-      style={{
-        position: 'fixed',
-        left: position.x,
-        top: position.y,
-        width: initialRect.width,
-        zIndex: 10000,
-        pointerEvents: 'none',
-        cursor: 'grabbing',
-      }}
-    >
-      {children}
-    </div>,
-    document.body
-  );
-}
-
-export function useDragDrop() {
+export function useDragDrop(): DragDropContextValue {
   const context = useContext(DragDropContext);
   if (!context) {
-    throw new Error('useDragDrop must be used within a DragDropProvider');
+    throw new Error("useDragDrop must be used within a DragDropProvider");
   }
   return context;
 }
