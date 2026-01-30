@@ -119,14 +119,20 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
    * Base styles come from CSS (.dnd-placeholder), only dynamic dimensions set here.
    */
   const createPlaceholder = useCallback(
-    (rect: DOMRect, element: HTMLElement, tagName: keyof HTMLElementTagNameMap = "div") => {
+    (
+      rect: DOMRect,
+      element: HTMLElement,
+      tagName: keyof HTMLElementTagNameMap = "div",
+      isHorizontal: boolean = false
+    ) => {
       const placeholder = document.createElement(tagName);
       placeholder.className = PLACEHOLDER_CLASS;
 
       const computedStyle = window.getComputedStyle(element);
 
       // Only set dynamic properties - base styles are in Draggable.css
-      placeholder.style.width = `${rect.width}px`;
+      // Vertical containers: width 100%, Horizontal containers: fixed width
+      placeholder.style.width = isHorizontal ? `${rect.width}px` : "100%";
       placeholder.style.height = `${rect.height}px`;
       placeholder.style.margin = computedStyle.margin;
 
@@ -322,9 +328,14 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
           index: dropIndex,
         };
 
+        const isHorizontal = targetContainer.direction === "horizontal";
+
         // Create placeholder if it doesn't exist
         if (!placeholderRef.current) {
-          placeholderRef.current = createPlaceholder(dragData.rect, dragData.element);
+          placeholderRef.current = createPlaceholder(dragData.rect, dragData.element, "div", isHorizontal);
+        } else {
+          // Update placeholder width based on target container direction
+          placeholderRef.current.style.width = isHorizontal ? `${dragData.rect.width}px` : "100%";
         }
 
         // Insert placeholder at new position
@@ -490,7 +501,8 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
       mousePositionRef.current = { x: e.clientX, y: e.clientY };
 
       // Create and position placeholder immediately (before hiding the element)
-      const placeholder = createPlaceholder(rect, element, placeholderTag);
+      const isHorizontal = container?.direction === "horizontal";
+      const placeholder = createPlaceholder(rect, element, placeholderTag, isHorizontal);
       placeholderRef.current = placeholder;
 
       // Insert placeholder at current position
